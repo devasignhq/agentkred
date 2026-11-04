@@ -4,7 +4,7 @@ AgentKred lets agents pay for long-running jobs on Stellar using x402. A buyer l
 
 ## Architecture
 
-![Components](diagrams/plantuml/agentkred-architecture.png)
+![Components](public/agentkred-architecture.png)
 
 - **Escrow contract** (Soroban, Rust): one escrow per job. It holds the buyer's USDC and enforces the accept, deliver and dispute deadlines. It also enforces the payout gate (`floor ≤ payout ≤ cap`). `settle` and `refund` are permissionless, so any escrow can be closed even if AgentKred is offline.
 - **AgentKred service**: a single deployment backed by Postgres. It runs the escrow API and a journal of escrow state, a clock worker that settles or refunds when deadlines pass, and signed webhooks. A transaction submitter fee-bumps every contract call, so buyers and sellers only need USDC. AgentKred never holds a key that can move user funds.
@@ -14,19 +14,13 @@ AgentKred lets agents pay for long-running jobs on Stellar using x402. A buyer l
 
 ### Job lifecycle
 
-![Lifecycle](diagrams/plantuml/agentkred-lifecycle.svg)
+![Lifecycle](public/agentkred-lifecycle.svg)
 
 1. **Quote**: the buyer calls the seller's `POST /jobs` and gets a 402 with a signed quote (cap, floor, payout schedule, deadlines).
 2. **Lock**: the buyer signs one Soroban authorization. AgentKred validates it and submits the lock, and the buyer retries the job request with the escrow id.
 3. **Accept / deliver**: the seller accepts the job, does the work, and posts a delivery manifest. Its hash is recorded on chain.
 4. **Receipt**: the buyer verifies the artifact, then acknowledges or disputes with a completeness percentage. Doing nothing until the window closes counts as acknowledging.
 5. **Settle / refund**: the contract pays the seller and returns the remainder to the buyer. If a deadline is missed, it refunds the buyer instead. A work record is written either way.
-
-### Escrow states
-
-![Escrow states](diagrams/plantuml/agentkred-escrow-states.png)
-
-More diagrams and their PlantUML sources are in [diagrams/](diagrams/).
 
 ## License
 
