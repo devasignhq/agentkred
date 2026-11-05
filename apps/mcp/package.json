@@ -1,0 +1,13 @@
+{
+    "name": "@agentkred/mcp",
+    "version": "0.0.0",
+    "private": true,
+    "license": "Apache-2.0",
+    "type": "module",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "typecheck": "tsc --noEmit"
+    }
+}
