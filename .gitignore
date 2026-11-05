@@ -9,6 +9,7 @@ node_modules
 
 # Node
 node_modules/
+dist/
 
 # Demo testnet keys and state
 # examples/cli-demo/.demo/
