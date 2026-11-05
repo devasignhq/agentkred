@@ -24,6 +24,26 @@ AgentKred lets agents pay for long-running jobs on Stellar using x402. A buyer l
 4. **Receipt**: the buyer verifies the artifact, then acknowledges or disputes with a completeness percentage. Doing nothing until the window closes counts as acknowledging.
 5. **Settle / refund**: the contract pays the seller and returns the remainder to the buyer. If a deadline is missed, it refunds the buyer instead. A work record is written either way.
 
+## Running the testnet demo
+
+The escrow contract currently implements lock, deliver, settle and refund ([docs/escrow-contract.md](docs/escrow-contract.md)). To run its tests:
+
+```sh
+cargo test
+```
+
+To deploy it to Stellar testnet and drive one settled escrow and one refunded escrow:
+
+```sh
+npm install
+cd examples/cli-demo
+npm run build:contract
+npm run setup        # fund accounts, deploy the contract, print the buyer address
+npm run demo         # after funding the buyer at faucet.circle.com
+```
+
+For details, see [examples/cli-demo](examples/cli-demo).
+
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).
