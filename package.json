@@ -1,0 +1,10 @@
+{
+    "name": "agentkred",
+    "private": true,
+    "license": "Apache-2.0",
+    "workspaces": [
+        "apps/*",
+        "packages/*",
+        "examples/*"
+    ]
+}

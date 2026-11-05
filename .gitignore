@@ -1,0 +1,16 @@
+_explore_
+_diagrams_
+node_modules
+*node_modules
+
+# Rust
+/target
+*test_snapshots
+
+# Node
+node_modules/
+
+# Demo testnet keys and state
+# examples/cli-demo/.demo/
+.env
+examples/cli-demo/evidence
