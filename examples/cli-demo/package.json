@@ -1,0 +1,21 @@
+{
+    "name": "@agentkred/cli-demo",
+    "version": "0.1.0",
+    "private": true,
+    "license": "Apache-2.0",
+    "type": "module",
+    "scripts": {
+        "build:contract": "stellar contract build --manifest-path ../../contracts/escrow/Cargo.toml",
+        "setup": "tsx src/setup.ts",
+        "demo": "tsx src/run.ts",
+        "typecheck": "tsc --noEmit"
+    },
+    "dependencies": {
+        "@stellar/stellar-sdk": "17.3.0"
+    },
+    "devDependencies": {
+        "@types/node": "24.19.2",
+        "tsx": "4.23.15",
+        "typescript": "6.0.3"
+    }
+}
