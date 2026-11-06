@@ -1,4 +1,4 @@
-// Typed wrapper around the deployed escrow contract's lock, deliver, settle, refund and get_escrow calls.
+// Typed wrapper around the deployed escrow contract's lock, deliver, acknowledge, settle, refund and get_escrow calls.
 
 import { Contract, Keypair, nativeToScVal, scValToNative, xdr } from "@stellar/stellar-sdk";
 import { Config } from "./config.js";
@@ -7,11 +7,16 @@ import { Submitted, Submitter } from "./submitter.js";
 export interface EscrowView {
     buyer: string;
     seller: string;
+    asset: string;
     cap: bigint;
+    quoteHash: string;
     state: string;
     lockedAt: number;
     deliverBy: number;
+    deliveredAt: number | null;
     disputeBy: number | null;
+    acknowledgedAt: number | null;
+    closedAt: number | null;
     manifestHash: string | null;
 }
 
@@ -29,6 +34,7 @@ export const ESCROW_ERRORS: Record<number, string> = {
     6: "DeliverDeadlinePassed",
     7: "DeliverDeadlineNotPassed",
     8: "DisputeWindowOpen",
+    9: "DisputeWindowClosed",
 };
 
 export class EscrowClient {
@@ -72,7 +78,14 @@ export class EscrowClient {
         return Submitter.sponsored(operation, [seller], this.sponsor.channel, this.sponsor.fees);
     }
 
-    /** Settles a delivered escrow from any account, which pays its own fee. */
+    /** Records the buyer's acknowledgement of a delivery, with AgentKred paying the fee. */
+    async acknowledge(buyer: Keypair, escrowId: bigint): Promise<Submitted> {
+        // Build and submit the acknowledge call through AgentKred's fee-bump
+        const operation = this.contract.call("acknowledge", nativeToScVal(escrowId, { type: "u64" }));
+        return Submitter.sponsored(operation, [buyer], this.sponsor.channel, this.sponsor.fees);
+    }
+
+    /** Settles a delivered or acknowledged escrow from any account, which pays its own fee. */
     async settle(caller: Keypair, escrowId: bigint): Promise<Submitted> {
         return Submitter.direct(this.contract.call("settle", nativeToScVal(escrowId, { type: "u64" })), caller);
     }
@@ -92,12 +105,22 @@ export class EscrowClient {
         return {
             buyer: raw.buyer,
             seller: raw.seller,
+            asset: raw.asset,
             cap: BigInt(raw.cap),
+            quoteHash: Buffer.from(raw.quote_hash).toString("hex"),
             state: Array.isArray(raw.state) ? String(raw.state[0]) : String(raw.state),
             lockedAt: Number(raw.locked_at),
             deliverBy: Number(raw.deliver_by),
-            disputeBy: raw.dispute_by == null ? null : Number(raw.dispute_by),
+            deliveredAt: optionalNumber(raw.delivered_at),
+            disputeBy: optionalNumber(raw.dispute_by),
+            acknowledgedAt: optionalNumber(raw.acknowledged_at),
+            closedAt: optionalNumber(raw.closed_at),
             manifestHash: raw.manifest_hash == null ? null : Buffer.from(raw.manifest_hash).toString("hex"),
         };
     }
+}
+
+/** Converts an optional contract integer into a number or null. */
+function optionalNumber(value: unknown): number | null {
+    return value == null ? null : Number(value);
 }

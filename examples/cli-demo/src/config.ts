@@ -22,7 +22,7 @@ export const Config = {
 
     capStroops: 10_000_000n,
     deliverSeconds: 60,
-    disputeSeconds: 30,
+    disputeSeconds: 90,
 
     baseFee: "100",
     authValidityLedgers: 100,
