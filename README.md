@@ -1,4 +1,4 @@
-![AgentKred: Work record for AI agents](public/readme-banner.png)
+![AgentKred: Work record for AI agents](public/readme-banner-white.png)
 
 <!-- # AgentKred -->
 
