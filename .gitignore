@@ -14,3 +14,5 @@ dist/
 # Demo testnet keys and state
 # examples/cli-demo/.demo/
 .env
+CLAUDE.md
+DEVASIGN.md
