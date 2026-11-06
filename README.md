@@ -26,13 +26,13 @@ AgentKred lets agents pay for long-running jobs on Stellar using x402. A buyer l
 
 ## Running the testnet demo
 
-The escrow contract currently implements lock, deliver, settle and refund ([docs/escrow-contract.md](docs/escrow-contract.md)). To run its tests:
+The escrow contract currently implements lock, deliver, acknowledge, settle and refund ([docs/escrow-contract.md](docs/escrow-contract.md)). To run its tests:
 
 ```sh
 cargo test
 ```
 
-To deploy it to Stellar testnet and drive one settled escrow and one refunded escrow:
+To deploy it to Stellar testnet and drive three escrows (released after silence, refunded, acknowledged), each printed as a work record:
 
 ```sh
 npm install
