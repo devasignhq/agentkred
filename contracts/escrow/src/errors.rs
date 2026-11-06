@@ -15,4 +15,5 @@ pub enum Error {
     DeliverDeadlinePassed = 6,
     DeliverDeadlineNotPassed = 7,
     DisputeWindowOpen = 8,
+    DisputeWindowClosed = 9,
 }

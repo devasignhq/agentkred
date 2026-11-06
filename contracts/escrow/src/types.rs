@@ -8,6 +8,7 @@ use soroban_sdk::{contracttype, Address, BytesN};
 pub enum EscrowState {
     Locked,
     Delivered,
+    Acknowledged,
     Released,
     Refunded,
 }
@@ -27,6 +28,7 @@ pub struct Escrow {
     pub delivered_at: Option<u64>,
     pub dispute_by: Option<u64>,
     pub manifest_hash: Option<BytesN<32>>,
+    pub acknowledged_at: Option<u64>,
     pub closed_at: Option<u64>,
     pub state: EscrowState,
 }

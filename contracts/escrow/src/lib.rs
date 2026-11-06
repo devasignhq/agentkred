@@ -1,4 +1,4 @@
-// Minimal AgentKred escrow: lock a cap, record delivery, then settle to the seller or refund the buyer.
+// Minimal AgentKred escrow: lock a cap, record delivery and acknowledgement, then settle to the seller or refund the buyer.
 #![no_std]
 
 mod errors;
@@ -9,7 +9,9 @@ mod types;
 mod test;
 
 pub use errors::Error;
-pub use events::{EscrowDelivered, EscrowLocked, EscrowRefunded, EscrowReleased};
+pub use events::{
+    EscrowAcknowledged, EscrowDelivered, EscrowLocked, EscrowRefunded, EscrowReleased,
+};
 pub use types::{DataKey, Escrow, EscrowState};
 
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env};
@@ -76,6 +78,7 @@ impl EscrowContract {
             delivered_at: None,
             dispute_by: None,
             manifest_hash: None,
+            acknowledged_at: None,
             closed_at: None,
             state: EscrowState::Locked,
         };
@@ -136,19 +139,51 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Pays the cap to the seller once the dispute window has closed. Callable by anyone.
-    /// @returns The amount paid to the seller
-    pub fn settle(env: Env, escrow_id: u64) -> Result<i128, Error> {
-        // Load the escrow and check it was delivered
+    /// Records the buyer's acceptance of a delivery, making the escrow settleable at once.
+    pub fn acknowledge(env: Env, escrow_id: u64) -> Result<(), Error> {
+        // Load the escrow and require the buyer's authorization
         let mut escrow = Self::load(&env, escrow_id)?;
+        escrow.buyer.require_auth();
+
+        // Check the escrow is delivered and its dispute window is still open
         if escrow.state != EscrowState::Delivered {
             return Err(Error::WrongState);
         }
-
-        // Check the dispute window has closed
         let now = env.ledger().timestamp();
-        if now < escrow.dispute_by.unwrap_or(u64::MAX) {
-            return Err(Error::DisputeWindowOpen);
+        if now >= escrow.dispute_by.unwrap_or(0) {
+            return Err(Error::DisputeWindowClosed);
+        }
+
+        // Record the acknowledgement
+        escrow.state = EscrowState::Acknowledged;
+        escrow.acknowledged_at = Some(now);
+        Self::save(&env, escrow_id, &escrow);
+
+        // Emit the acknowledgement event
+        EscrowAcknowledged {
+            escrow_id,
+            buyer: escrow.buyer,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Pays the cap to the seller once acknowledged or once the dispute window has closed. Callable by anyone.
+    /// @returns The amount paid to the seller
+    pub fn settle(env: Env, escrow_id: u64) -> Result<i128, Error> {
+        // Load the escrow and check it was delivered or acknowledged
+        let mut escrow = Self::load(&env, escrow_id)?;
+        let now = env.ledger().timestamp();
+        match escrow.state {
+            EscrowState::Acknowledged => {}
+            EscrowState::Delivered => {
+                // Require the dispute window to have closed on an unacknowledged delivery
+                if now < escrow.dispute_by.unwrap_or(u64::MAX) {
+                    return Err(Error::DisputeWindowOpen);
+                }
+            }
+            _ => return Err(Error::WrongState),
         }
 
         // Mark the escrow released before moving funds

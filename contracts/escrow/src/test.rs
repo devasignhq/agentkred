@@ -394,4 +394,109 @@ fn unknown_escrow_is_not_found() {
     );
     assert_eq!(f.client.try_settle(&9), Err(Ok(Error::EscrowNotFound)));
     assert_eq!(f.client.try_refund(&9), Err(Ok(Error::EscrowNotFound)));
+    assert_eq!(f.client.try_acknowledge(&9), Err(Ok(Error::EscrowNotFound)));
+}
+
+#[test]
+fn acknowledge_then_settle_pays_seller_before_window_closes() {
+    // Lock and deliver an escrow
+    let f = fixture();
+    let id = lock(&f);
+    f.client.deliver(&id, &hash(&f.env, 2));
+
+    // Acknowledge inside the dispute window
+    advance(&f, 5);
+    f.client.acknowledge(&id);
+    let acknowledged = f.client.get_escrow(&id);
+    assert_eq!(acknowledged.state, EscrowState::Acknowledged);
+    assert_eq!(acknowledged.acknowledged_at, Some(START + 5));
+
+    // Settle immediately without waiting for the window
+    assert_eq!(f.client.settle(&id), CAP);
+
+    // Check the seller was paid and the acknowledgement kept on the record
+    assert_eq!(f.token.balance(&f.seller), CAP);
+    assert_eq!(f.token.balance(&f.contract), 0);
+    let released = f.client.get_escrow(&id);
+    assert_eq!(released.state, EscrowState::Released);
+    assert_eq!(released.acknowledged_at, Some(START + 5));
+    assert_eq!(released.closed_at, Some(START + 5));
+}
+
+#[test]
+fn acknowledge_requires_buyer_auth() {
+    // Lock, deliver and acknowledge an escrow
+    let f = fixture();
+    let id = lock(&f);
+    f.client.deliver(&id, &hash(&f.env, 2));
+    f.client.acknowledge(&id);
+
+    // Check the only authorization recorded is the buyer's
+    let auths = f.env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(auths[0].0, f.buyer);
+}
+
+#[test]
+fn acknowledge_fails_before_delivery() {
+    // Lock an escrow without delivering
+    let f = fixture();
+    let id = lock(&f);
+
+    // Check acknowledge is rejected
+    assert_eq!(f.client.try_acknowledge(&id), Err(Ok(Error::WrongState)));
+}
+
+#[test]
+fn acknowledge_fails_after_window_closes() {
+    // Lock and deliver an escrow, then let the window close
+    let f = fixture();
+    let id = lock(&f);
+    f.client.deliver(&id, &hash(&f.env, 2));
+    advance(&f, DISPUTE_S);
+
+    // Check a late acknowledgement is rejected
+    assert_eq!(
+        f.client.try_acknowledge(&id),
+        Err(Ok(Error::DisputeWindowClosed))
+    );
+}
+
+#[test]
+fn acknowledge_fails_twice() {
+    // Lock, deliver and acknowledge an escrow
+    let f = fixture();
+    let id = lock(&f);
+    f.client.deliver(&id, &hash(&f.env, 2));
+    f.client.acknowledge(&id);
+
+    // Check a second acknowledgement is rejected
+    assert_eq!(f.client.try_acknowledge(&id), Err(Ok(Error::WrongState)));
+}
+
+#[test]
+fn acknowledged_escrow_cannot_be_refunded() {
+    // Lock, deliver and acknowledge an escrow, then let deliver-by pass
+    let f = fixture();
+    let id = lock(&f);
+    f.client.deliver(&id, &hash(&f.env, 2));
+    f.client.acknowledge(&id);
+    advance(&f, DELIVER_S);
+
+    // Check refund is rejected and the cap stays in the contract
+    assert_eq!(f.client.try_refund(&id), Err(Ok(Error::WrongState)));
+    assert_eq!(f.token.balance(&f.contract), CAP);
+}
+
+#[test]
+fn silent_settle_leaves_acknowledgement_empty() {
+    // Lock and deliver an escrow, then let the window close in silence
+    let f = fixture();
+    let id = lock(&f);
+    f.client.deliver(&id, &hash(&f.env, 2));
+    advance(&f, DISPUTE_S);
+
+    // Settle and check no acknowledgement was recorded
+    f.client.settle(&id);
+    assert_eq!(f.client.get_escrow(&id).acknowledged_at, None);
 }

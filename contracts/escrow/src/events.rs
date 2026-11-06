@@ -26,6 +26,15 @@ pub struct EscrowDelivered {
     pub dispute_by: u64,
 }
 
+/// Emitted when the buyer acknowledges a delivery inside the dispute window.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowAcknowledged {
+    #[topic]
+    pub escrow_id: u64,
+    pub buyer: Address,
+}
+
 /// Emitted when the cap is paid out to the seller.
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
