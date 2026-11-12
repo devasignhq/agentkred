@@ -1,8 +1,8 @@
-// One-time testnet setup: funds AgentKred's accounts, opens zero-XLM buyer and seller accounts, and deploys the escrow.
+// Testnet setup: funds AgentKred's accounts, opens zero-XLM buyer and seller accounts, and deploys or upgrades the escrow.
 
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { Address, Keypair, Operation } from "@stellar/stellar-sdk";
+import { Address, Contract, Keypair, Operation, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { Chain } from "./chain.js";
 import { Config } from "./config.js";
 import { Log } from "./log.js";
@@ -36,7 +36,7 @@ async function main(): Promise<void> {
     await Chain.server.getContractInstance(usdcContract);
     Log.info("USDC contract", usdcContract);
 
-    // Upload and deploy the escrow contract when it is missing or out of date
+    // Deploy the escrow contract when missing, or upgrade it when out of date
     Log.heading("Deploying the escrow contract");
     state.deployment = await ensureDeployed(state.deployment, fees);
     DemoState.save(state);
@@ -98,7 +98,7 @@ async function openSponsoredAccounts(state: StoredState, fees: Keypair, accounts
     Log.tx(submitted.hash);
 }
 
-/** Uploads and deploys the escrow WASM unless the current build is already deployed. */
+/** Deploys the escrow on first run, then upgrades it in place whenever the build changes. */
 async function ensureDeployed(current: Deployment | undefined, fees: Keypair): Promise<Deployment> {
     // Read the built WASM and hash it
     if (!existsSync(Config.wasmPath)) {
@@ -106,9 +106,11 @@ async function ensureDeployed(current: Deployment | undefined, fees: Keypair): P
     }
     const wasm = readFileSync(Config.wasmPath);
     const wasmHash = createHash("sha256").update(wasm).digest("hex");
+    const redeploy = process.argv.includes("--redeploy");
 
-    // Reuse the deployment when it already runs this build
-    if (current?.wasmHash === wasmHash && !process.argv.includes("--redeploy")) {
+    // Reuse the deployment when the code live on chain is already this build
+    const liveHash = current ? await liveWasmHash(current.contractId) : null;
+    if (current && liveHash === wasmHash && !redeploy) {
         Log.info("contract", `${current.contractId} (already deployed)`);
         return current;
     }
@@ -119,21 +121,59 @@ async function ensureDeployed(current: Deployment | undefined, fees: Keypair): P
     Log.info("wasm hash", wasmHash);
     Log.tx(upload.hash);
 
-    // Deploy a contract instance from the uploaded WASM
+    // Upgrade the existing contract when it was deployed with an admin
+    if (current?.admin && !redeploy) {
+        return upgrade(current, wasmHash, upload.hash, fees);
+    }
+
+    // Deploy a fresh contract instance with the fee account as admin
     Log.step("Deploying contract");
     const deploy = await Submitter.direct(
         Operation.createCustomContract({
             address: Address.fromString(fees.publicKey()),
             wasmHash: Buffer.from(wasmHash, "hex"),
             salt: randomBytes(32),
+            constructorArgs: [nativeToScVal(fees.publicKey(), { type: "address" })],
         }),
         fees,
     );
     const contractId = Address.fromScVal(deploy.returnValue!).toString();
     Log.info("contract", contractId);
+    Log.info("admin", fees.publicKey());
     Log.tx(deploy.hash);
 
-    return { contractId, wasmHash, uploadTx: upload.hash, deployTx: deploy.hash };
+    return { contractId, wasmHash, admin: fees.publicKey(), uploadTx: upload.hash, deployTx: deploy.hash, upgradeTxs: [] };
+}
+
+/** Returns the hash of the WASM a contract currently runs, or null when it cannot be read. */
+async function liveWasmHash(contractId: string): Promise<string | null> {
+    // Fetch the running code and hash it, treating a missing contract as null
+    try {
+        const wasm = await Chain.server.getContractWasmByContractId(contractId);
+        return createHash("sha256").update(wasm).digest("hex");
+    } catch {
+        return null;
+    }
+}
+
+/** Swaps a deployed contract's code for the uploaded WASM, keeping its ID and storage. */
+async function upgrade(current: Deployment, wasmHash: string, uploadTx: string, admin: Keypair): Promise<Deployment> {
+    // Call upgrade as the admin
+    Log.step("Upgrading contract");
+    const contract = new Contract(current.contractId);
+    const upgraded = await Submitter.direct(
+        contract.call("upgrade", xdr.ScVal.scvBytes(Buffer.from(wasmHash, "hex"))),
+        admin,
+    );
+    Log.info("contract", `${current.contractId} (upgraded)`);
+    Log.tx(upgraded.hash);
+
+    return {
+        ...current,
+        wasmHash,
+        uploadTx,
+        upgradeTxs: [...(current.upgradeTxs ?? []), upgraded.hash],
+    };
 }
 
 main().catch((error) => {

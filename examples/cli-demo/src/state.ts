@@ -12,8 +12,10 @@ export const ROLES: Role[] = ["fees", "channel", "buyer", "seller", "anyone"];
 export interface Deployment {
     contractId: string;
     wasmHash: string;
+    admin?: string;
     uploadTx: string;
     deployTx: string;
+    upgradeTxs?: string[];
 }
 
 export interface StoredState {
