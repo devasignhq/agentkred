@@ -42,7 +42,7 @@ npm run setup
 - Generates the keypairs and saves them to `.demo/state.json`, which holds testnet keys only. Delete it first to start from scratch.
 - Funds AgentKred's accounts with Friendbot.
 - Opens the buyer and seller as zero-XLM accounts with USDC trustlines.
-- Deploys the contract.
+- Deploys the contract with AgentKred's fee account as its admin, or upgrades it in place if it is already deployed.
 
 At the end it prints the buyer's address.
 
@@ -52,7 +52,7 @@ Next, fund the buyer with at least 3 testnet USDC from [faucet.circle.com](https
 npm run demo
 ```
 
-The run takes about five minutes. Run it again whenever you like. Each run locks 1 USDC three times and spends 2: runs A and C each pay 1 to the seller, and run B refunds 1 to the buyer. To deploy a fresh contract after you change it, rebuild and then run `npm run setup -- --redeploy`.
+The run takes about five minutes. Run it again whenever you like. Each run locks 1 USDC three times and spends 2: runs A and C each pay 1 to the seller, and run B refunds 1 to the buyer. After you change the contract, rebuild it and run `npm run setup` again. It uploads the new WASM and upgrades the deployed contract in place, so the contract ID and existing escrows stay the same. Upgrades are a testnet-only feature: the admin and the upgrade function will be removed before mainnet. To deploy a brand-new contract instead, run `npm run setup -- --redeploy`.
 
 ## Settings
 
