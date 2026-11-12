@@ -15,13 +15,28 @@ It covers lock, deliver, acknowledge, settle and refund. Accept, dispute, the fl
 | `refund(escrow_id)` | Anyone | State is `Locked` and `now ≥ deliver_by` | Returns the cap to the buyer. State becomes `Refunded`. Returns the amount |
 | `get_escrow(escrow_id)` | Anyone | The escrow exists | Returns the stored escrow |
 
+The contract is deployed with one constructor argument, `admin`, the address allowed to upgrade it on testnet.
+
 A released escrow keeps `acknowledged_at`, so a reader can tell a buyer's explicit acknowledgement from a dispute window that closed in silence.
 
 All deadlines are compared against ledger time, never against a time passed in by the caller. `lock` extends the escrow's storage TTL past its latest possible dispute deadline, plus about one day.
 
+## Admin and upgrades (testnet only)
+
+On testnet the contract has an admin who can upgrade its code in place, so a change doesn't need a redeploy. The contract ID, every escrow and every balance stay the same; only the code changes. **The admin and the upgrade function will be removed before mainnet**, and the mainnet contract will have no admin.
+
+| Function | Caller | Effect |
+| --- | --- | --- |
+| `upgrade(new_wasm_hash)` | Admin | Replaces the contract's code with an already uploaded WASM and emits `contract_upgraded` |
+| `set_admin(new_admin)` | Admin | Hands the admin role to `new_admin` |
+| `get_admin()` | Anyone | Returns the current admin |
+| `version()` | Anyone | Returns the contract version. It is bumped with every upgrade |
+
+To release a change, bump `version()`, rebuild, and run `npm run setup` in [examples/cli-demo](../examples/cli-demo). Setup uploads the new WASM and calls `upgrade`.
+
 ## Events
 
-Each event takes `escrow_id` as a topic.
+Each escrow event takes `escrow_id` as a topic.
 
 | Event | Data |
 | --- | --- |
@@ -30,6 +45,7 @@ Each event takes `escrow_id` as a topic.
 | `escrow_acknowledged` | buyer |
 | `escrow_released` | seller, payout |
 | `escrow_refunded` | buyer, amount |
+| `contract_upgraded` | new WASM hash, admin (no escrow id topic) |
 
 ## Errors
 
