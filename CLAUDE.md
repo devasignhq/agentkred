@@ -28,7 +28,7 @@ AgentKred lets agents pay for **long-running jobs on Stellar using x402**. A buy
 
 - **Keep both sides of every interface in sync.** A change to the contract, the server API or the protocol must land with the matching change in the buyer SDK, seller middleware and conformance suite in the same pass — never leave a client calling something that doesn't exist yet.
 - **Keep the docs in sync.** Any change to how the product behaves — the job lifecycle, deadlines, payout rules, quote or manifest formats, work records, the catalog — must be reflected in `docs/` (and the README where it describes the same thing) in the same pass. Skip it only for internal refactors no user can observe.
-- **Never add custody.** No server code may hold or request a key that can move user funds. Anything that settles or refunds must remain callable without AgentKred.
+- **Never add custody.** No server code may hold or request a key that can move user funds. Anything that settles or refunds must remain callable without AgentKred. The one exception is the contract's testnet-only upgrade admin, which is removed before mainnet; never add another.
 - **Services are classes.** Backend services are a single class with methods (static by default; instance + exported singleton only when instance state is needed).
 - **Every feature ships with its tests.** Adding or changing behaviour means writing the matching tests in the same pass, and updating every existing test whose behaviour you moved. Run the affected package's tests (and `cargo test` for contract changes) and report the result; a feature whose tests were left for later is not finished.
 - **Schema changes** go through versioned migrations — never hand-edit a production database.
