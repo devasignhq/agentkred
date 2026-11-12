@@ -34,7 +34,61 @@ AgentKred lets agents pay for **long-running jobs on Stellar using x402**. A buy
 - **Schema changes** go through versioned migrations — never hand-edit a production database.
 - **Indentation is 4 spaces**, TypeScript throughout.
 - **Do not congest code.** I want my code properly spaced for readability.
+- **Commit messages follow the rules below.** Never push unless asked.
 - **Comments follow the guidelines below — no exceptions, no judgement calls.** This is the single most-violated rule in this repo. It applies to *every* file you create or edit, in *every* language, on *every* task — including quick fixes, and including code you are only passing through. Before you report a task as done, run the self-audit at the end of this file against your own diff. A change carrying a comment that breaks these rules is **not finished**.
+
+---
+
+## Commit Messages
+
+Every commit message is a **single line** in Conventional Commits format: `type(scope): description`.
+
+### Rules
+
+- **Single line only.** No body, no bullet points, no newlines, no trailers.
+- **Type** is the most accurate of `feat`, `fix`, `refactor`, `chore`, `docs`, `style`, `test`, `perf`.
+- **Scope** is the most affected module, directory or feature, taken from the file paths (`escrow`, `cli-demo`, `server`, `readme`, `claude`).
+- **Imperative mood, present tense:** "add", not "adds" or "added".
+- **Describe the meaning** of the change, not just the file that was touched.
+- **One concern per commit.** When grouping a set of changes, split unrelated concerns into separate commits rather than listing them in one message. In practice that means:
+  - Code and its tests go together.
+  - Docs, README and demo-state updates each get their own `docs` or `chore` commit.
+- **Coupled changes use `+`.** Join two halves with ` + ` only when they are genuinely inseparable, meaning one enables or requires the other.
+  - Both halves must share the same type and scope.
+  - Never use more than two halves.
+  - Default to a single message.
+
+### Examples
+
+**Good, single concern:**
+- `feat(escrow): add buyer acknowledge that allows immediate settle`
+- `fix(openai): normalise response replay tool IDs`
+- `perf(parser): replace O(n²) dedup loop with Set-based lookup`
+
+**Good, two coupled halves:**
+- `fix(auth): rotate JWT secret + invalidate active sessions`
+- `feat(api): add pagination to /users endpoint + update client to consume cursor`
+
+**Bad:**
+
+| Message | Why it's wrong |
+| --- | --- |
+| `fix: update files` | Vague: says nothing about what changed or where |
+| `feat(auth): adds login route` | Wrong tense |
+| `feat(auth): add login route, fix unrelated parser bug` | Two unrelated concerns, so it should be two commits |
+| `feat(auth): add login route + update README` | A docs update isn't a coupled half |
+| `feat(api): add pagination + fix typo + bump version` | Three halves |
+
+### Self-check before committing
+
+Re-read each message before committing:
+- It is one line.
+- It is imperative.
+- It follows `type(scope): description`.
+- It is specific.
+- It describes one concern, or two genuinely coupled halves sharing a type and scope.
+
+If any check fails, rewrite the message.
 
 ---
 
