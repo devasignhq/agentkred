@@ -6,7 +6,7 @@ use crate::{
     DataKey, Error, EscrowContract, EscrowContractClient, EscrowState, TTL_MARGIN_LEDGERS,
 };
 use soroban_sdk::testutils::storage::Persistent as _;
-use soroban_sdk::testutils::{Address as _, AuthorizedFunction, Ledger};
+use soroban_sdk::testutils::{Address as _, AuthorizedFunction, Ledger, MockAuth, MockAuthInvoke};
 use soroban_sdk::token::{StellarAssetClient, TokenClient};
 use soroban_sdk::{symbol_short, Address, BytesN, Env, IntoVal};
 
@@ -23,6 +23,7 @@ struct Fixture {
     token: TokenClient<'static>,
     buyer: Address,
     seller: Address,
+    admin: Address,
 }
 
 /// Registers the contract and a funded test token with all auths mocked.
@@ -39,8 +40,9 @@ fn fixture() -> Fixture {
     let seller = Address::generate(&env);
     StellarAssetClient::new(&env, &sac.address()).mint(&buyer, &(CAP * 3));
 
-    // Register the escrow contract
-    let contract = env.register(EscrowContract, ());
+    // Register the escrow contract with its admin
+    let admin = Address::generate(&env);
+    let contract = env.register(EscrowContract, (&admin,));
     let client = EscrowContractClient::new(&env, &contract);
     let token = TokenClient::new(&env, &sac.address());
 
@@ -51,6 +53,7 @@ fn fixture() -> Fixture {
         token,
         buyer,
         seller,
+        admin,
     }
 }
 
@@ -499,4 +502,83 @@ fn silent_settle_leaves_acknowledgement_empty() {
     // Settle and check no acknowledgement was recorded
     f.client.settle(&id);
     assert_eq!(f.client.get_escrow(&id).acknowledged_at, None);
+}
+
+#[test]
+fn constructor_sets_the_admin() {
+    // Check the admin passed at deploy is stored
+    let f = fixture();
+    assert_eq!(f.client.get_admin(), f.admin);
+}
+
+#[test]
+fn set_admin_requires_admin_auth_and_moves_the_role() {
+    // Hand the admin role to a new address
+    let f = fixture();
+    let new_admin = Address::generate(&f.env);
+    f.client.set_admin(&new_admin);
+
+    // Check the old admin authorized it and the role moved
+    let auths = f.env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(auths[0].0, f.admin);
+    assert_eq!(f.client.get_admin(), new_admin);
+}
+
+#[test]
+fn upgrade_swaps_to_uploaded_wasm() {
+    // Load the built contract WASM, skipping when it has not been built
+    let wasm_path = "../../target/wasm32v1-none/release/agentkred_escrow.wasm";
+    let Ok(wasm) = std::fs::read(wasm_path) else {
+        std::println!("Skipping upgrade_swaps_to_uploaded_wasm: WASM not found at {wasm_path}");
+        return;
+    };
+
+    // Upload the WASM and upgrade to it as the admin
+    let f = fixture();
+    let wasm_hash = f.env.deployer().upload_contract_wasm(wasm.as_slice());
+    f.client.upgrade(&wasm_hash);
+
+    // Check the admin authorized the upgrade and the contract still answers
+    let auths = f.env.auths();
+    assert_eq!(auths[0].0, f.admin);
+    assert_eq!(f.client.get_admin(), f.admin);
+}
+
+#[test]
+#[should_panic(expected = "MissingValue")]
+fn upgrade_fails_for_wasm_that_was_never_uploaded() {
+    // Upgrade to a hash with no uploaded WASM behind it
+    let f = fixture();
+    f.client.upgrade(&hash(&f.env, 9));
+}
+
+#[test]
+fn upgrade_requires_admin_auth() {
+    // Authorize the call as an unrelated address only
+    let f = fixture();
+    let stranger = Address::generate(&f.env);
+    let wasm_hash = hash(&f.env, 9);
+    let result = f
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &f.contract,
+                fn_name: "upgrade",
+                args: (wasm_hash.clone(),).into_val(&f.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_upgrade(&wasm_hash);
+
+    // Check the upgrade was refused
+    assert!(result.is_err());
+}
+
+#[test]
+fn version_reports_the_code_version() {
+    // Check the version of this build
+    let f = fixture();
+    assert_eq!(f.client.version(), 1);
 }

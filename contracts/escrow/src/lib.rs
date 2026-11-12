@@ -10,7 +10,8 @@ mod test;
 
 pub use errors::Error;
 pub use events::{
-    EscrowAcknowledged, EscrowDelivered, EscrowLocked, EscrowRefunded, EscrowReleased,
+    ContractUpgraded, EscrowAcknowledged, EscrowDelivered, EscrowLocked, EscrowRefunded,
+    EscrowReleased,
 };
 pub use types::{DataKey, Escrow, EscrowState};
 
@@ -30,6 +31,51 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Sets the admin who may upgrade the contract. Runs once, at deploy.
+    pub fn __constructor(env: Env, admin: Address) {
+        // Store the admin
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    /// Hands the admin role to `new_admin`. Admin only.
+    pub fn set_admin(env: Env, new_admin: Address) {
+        // Require the current admin's authorization
+        Self::require_admin(&env);
+
+        // Store the new admin
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+    }
+
+    /// Returns the current admin.
+    pub fn get_admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("admin is set by the constructor")
+    }
+
+    /// Replaces the contract's code with the uploaded WASM `new_wasm_hash`, keeping all storage. Admin only.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        // Require the admin's authorization
+        let admin = Self::require_admin(&env);
+
+        // Swap the contract's code
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+
+        // Emit the upgrade event
+        ContractUpgraded {
+            new_wasm_hash,
+            admin,
+        }
+        .publish(&env);
+    }
+
+    /// Returns the contract version. Bump it with every upgrade.
+    pub fn version() -> u32 {
+        1
+    }
+
     /// Locks `cap` of `asset` from the buyer and fixes the deliver and dispute clocks.
     /// The buyer's one authorization covers both this call and the token transfer.
     /// @returns The new escrow id
@@ -250,6 +296,14 @@ impl EscrowContract {
     /// Returns the stored escrow for `escrow_id`.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<Escrow, Error> {
         Self::load(&env, escrow_id)
+    }
+
+    /// Requires the admin's authorization and returns the admin.
+    fn require_admin(env: &Env) -> Address {
+        // Load the admin and require its authorization
+        let admin = Self::get_admin(env.clone());
+        admin.require_auth();
+        admin
     }
 
     /// Reserves and returns the next escrow id.

@@ -39,4 +39,5 @@ pub struct Escrow {
 pub enum DataKey {
     NextId,
     Escrow(u64),
+    Admin,
 }

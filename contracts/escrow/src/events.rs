@@ -1,4 +1,4 @@
-// Events emitted on every escrow state transition.
+// Events emitted on every escrow state transition and on contract upgrades.
 
 use soroban_sdk::{contractevent, Address, BytesN};
 
@@ -53,4 +53,12 @@ pub struct EscrowRefunded {
     pub escrow_id: u64,
     pub buyer: Address,
     pub amount: i128,
+}
+
+/// Emitted when the admin swaps the contract's code.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractUpgraded {
+    pub new_wasm_hash: BytesN<32>,
+    pub admin: Address,
 }
