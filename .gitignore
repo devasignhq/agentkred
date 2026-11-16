@@ -11,8 +11,8 @@ node_modules
 node_modules/
 dist/
 
-# Demo testnet keys and state
-# examples/cli-demo/.demo/
+# Demo testnet keys
+examples/cli-demo/.demo/secrets.json
 .env
 examples\cli-demo\evidence
 CLAUDE.md

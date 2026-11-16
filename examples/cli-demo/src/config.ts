@@ -19,6 +19,7 @@ export const Config = {
 
     wasmPath: resolve(repoRoot, "target/wasm32v1-none/release/agentkred_escrow.wasm"),
     statePath: resolve(demoRoot, ".demo/state.json"),
+    secretsPath: resolve(demoRoot, ".demo/secrets.json"),
     evidenceDir: resolve(demoRoot, "evidence"),
 
     capStroops: 10_000_000n,
