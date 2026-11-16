@@ -1,0 +1,103 @@
+# Escrow contract CI: unit and property tests, the quote-hash vector, coverage, and a fixed-length fuzz run.
+name: contract
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - "contracts/**"
+            - "examples/cli-demo/**"
+            - "Cargo.toml"
+            - "Cargo.lock"
+            - "package.json"
+            - "package-lock.json"
+            - ".github/workflows/contract.yml"
+    pull_request:
+        paths:
+            - "contracts/**"
+            - "examples/cli-demo/**"
+            - "Cargo.toml"
+            - "Cargo.lock"
+            - "package.json"
+            - "package-lock.json"
+            - ".github/workflows/contract.yml"
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: wasm32v1-none
+            - uses: Swatinem/rust-cache@v2
+
+            # Build the WASM the upgrade test loads
+            - run: cargo build --release --target wasm32v1-none -p agentkred-escrow
+            - run: cargo test
+            - run: cargo clippy --all-targets -- -D warnings
+
+    quote-vector:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: npm
+
+            # Check the TypeScript quote encoder against the hash vector the Rust tests assert
+            - run: npm ci
+            - run: npm test -w @agentkred/cli-demo
+
+    coverage:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: wasm32v1-none
+                  components: llvm-tools-preview
+            - uses: Swatinem/rust-cache@v2
+            - uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-llvm-cov
+
+            # Measure line coverage and publish the summary and the full report
+            - run: cargo build --release --target wasm32v1-none -p agentkred-escrow
+            - run: cargo llvm-cov -p agentkred-escrow --lcov --output-path lcov.info
+            - run: cargo llvm-cov report -p agentkred-escrow --html --output-dir coverage
+            - run: |
+                  echo '## Escrow contract coverage' >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                  cargo llvm-cov report -p agentkred-escrow --summary-only >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: escrow-coverage
+                  path: |
+                      lcov.info
+                      coverage
+
+    fuzz:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@nightly
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: contracts/escrow/fuzz
+            - uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-fuzz
+
+            # Fuzz random quotes and call sequences for five minutes
+            - run: cargo fuzz run lifecycle -- -max_total_time=300
+              working-directory: contracts/escrow
+
+            # Upload any crashing inputs
+            - uses: actions/upload-artifact@v4
+              if: failure()
+              with:
+                  name: escrow-fuzz-artifacts
+                  path: contracts/escrow/fuzz/artifacts
