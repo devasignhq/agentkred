@@ -1,0 +1,26 @@
+[package]
+name = "agentkred-escrow-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+agentkred-escrow = { path = "..", features = ["testutils"] }
+soroban-sdk = { version = "=23.5.3", features = ["testutils", "hazmat-address"] }
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+ed25519-dalek = "=2.2.0"
+
+[[bin]]
+name = "lifecycle"
+path = "fuzz_targets/lifecycle.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
