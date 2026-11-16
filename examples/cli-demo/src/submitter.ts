@@ -17,6 +17,7 @@ import { Config } from "./config.js";
 export interface Submitted {
     hash: string;
     returnValue?: xdr.ScVal;
+    events: xdr.ContractEvent[];
 }
 
 export class Submitter {
@@ -159,9 +160,9 @@ export class Submitter {
             throw new Error(`Transaction rejected with status ${sent.status}: ${sent.errorResult?.toXDR("base64") ?? ""}`);
         }
 
-        // Wait for confirmation and return the hash and value
+        // Wait for confirmation and return the hash, value and contract events
         const result = await Chain.confirm(sent.hash);
-        return { hash: sent.hash, returnValue: result.returnValue };
+        return { hash: sent.hash, returnValue: result.returnValue, events: result.events?.contractEventsXdr.flat() ?? [] };
     }
 }
 

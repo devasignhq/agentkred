@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Config } from "./config.js";
 import { Deployment } from "./state.js";
-import { WorkRecord } from "./workRecord.js";
+import { WorkRecord, WorkRecords } from "./workRecord.js";
 
 export interface EvidenceStep {
     run: string;
@@ -53,6 +53,7 @@ export class Evidence {
             `- WASM hash: \`${this.deployment.wasmHash}\``,
             `- Upload tx: [\`${this.deployment.uploadTx}\`](${explorer}/tx/${this.deployment.uploadTx})`,
             `- Deploy tx: [\`${this.deployment.deployTx}\`](${explorer}/tx/${this.deployment.deployTx})`,
+            ...(this.deployment.upgradeTxs ?? []).map((hash) => `- Upgrade tx: [\`${hash}\`](${explorer}/tx/${hash})`),
             "",
             "## Transactions",
             "",
@@ -84,11 +85,10 @@ export class Evidence {
 
     /** Formats one work record as a Markdown section. */
     private recordLines(record: WorkRecord): string[] {
-        // Build the closing transaction link and the formatted clock values
+        // Build the closing transaction link and the formatted split
         const closeLink = `[\`${record.closeTx}\`](${Config.explorerUrl}/tx/${record.closeTx})`;
         const manifest = record.manifestHash ? `\`${record.manifestHash}\`` : "none (never delivered)";
-        const onTime = record.deliveredOnTime == null ? "" : record.deliveredOnTime ? " (on time)" : " (late)";
-        const delivered = `${record.deliveredAt ?? "-"}${onTime}`;
+        const completeness = record.completeness == null ? "-" : `${record.completeness}%`;
 
         return [
             "",
@@ -98,12 +98,14 @@ export class Evidence {
             `- Buyer: \`${record.buyer}\``,
             `- Seller: \`${record.seller}\``,
             `- Asset: ${record.asset}`,
-            `- Cap / payout to seller: ${record.cap} / ${record.payout}`,
+            `- Cap / floor: ${record.cap} / ${record.floor}`,
+            `- Completeness: ${completeness}; paid to seller ${record.payout}; returned to buyer ${record.returnedToBuyer}`,
             `- Payment reference: escrow ${record.escrowId} + ${closeLink}`,
+            `- Job id: \`${record.jobId}\``,
             `- Quote hash: \`${record.quoteHash}\``,
             `- Manifest hash: ${manifest}`,
-            `- Locked at ${record.lockedAt}, deliver-by ${record.deliverBy}, delivered at ${delivered}`,
-            `- Acknowledged at ${record.acknowledgedAt ?? "-"}, dispute-by ${record.disputeBy ?? "-"}, closed at ${record.closedAt ?? "-"}`,
+            `- Locked at ${record.lockedAt}; accepted ${WorkRecords.met(record.acceptedAt, record.acceptBy)}; delivered ${WorkRecords.met(record.deliveredAt, record.deliverBy)}`,
+            `- Acknowledged at ${record.acknowledgedAt ?? "-"}, disputed at ${record.disputedAt ?? "-"}, dispute-by ${record.disputeBy ?? "-"}, closed at ${record.closedAt ?? "-"}`,
             "- Times are ledger time in unix seconds",
         ];
     }

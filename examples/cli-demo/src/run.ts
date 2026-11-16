@@ -1,12 +1,13 @@
-// Drives three escrows on testnet (settled after silence, refunded, acknowledged) and prints a work record for each.
+// Drives the five escrow outcomes on testnet (acknowledged, silent, disputed, not accepted, not delivered) and prints a work record for each.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Keypair } from "@stellar/stellar-sdk";
 import { Chain, sleep } from "./chain.js";
 import { Config } from "./config.js";
 import { ESCROW_ERRORS, EscrowClient } from "./escrowClient.js";
 import { Evidence } from "./evidence.js";
 import { Log } from "./log.js";
+import { Quotes } from "./quote.js";
 import { DemoState } from "./state.js";
 import { SimulationError, Submitted } from "./submitter.js";
 import { WorkRecords } from "./workRecord.js";
@@ -25,9 +26,11 @@ interface Demo {
     evidence: Evidence;
 }
 
-const RUN_COUNT = 3n;
+const EARLY_SETTLE = 8;
+const EARLY_REFUND_ACCEPT = 16;
+const EARLY_REFUND_DELIVER = 7;
 
-/** Runs the silent, refund and acknowledged paths, then writes the evidence file. */
+/** Runs the five outcomes in turn, then writes the evidence file. */
 async function main(): Promise<void> {
     // Load the deployed contract and every role's keys
     const state = DemoState.requireDeployed();
@@ -44,16 +47,16 @@ async function main(): Promise<void> {
         evidence: new Evidence(state.deployment),
     };
 
-    // Print the contract and the demo parameters
-    Log.heading("AgentKred minimal escrow on Stellar testnet");
+    // Print the contract and the quoted terms
+    Log.heading("AgentKred escrow on Stellar testnet");
     Log.info("contract", state.deployment.contractId);
     Log.info("explorer", `${Config.explorerUrl}/contract/${state.deployment.contractId}`);
-    Log.info("cap", `${Chain.format(Config.capStroops)} USDC`);
-    Log.info("deliver-by", `${Config.deliverSeconds}s after lock`);
-    Log.info("dispute", `${Config.disputeSeconds}s after delivery`);
+    Log.info("cap / floor", `${Chain.format(Config.capStroops)} / ${Chain.format(Config.floorStroops)} USDC`);
+    Log.info("schedule", Config.schedule.map((step) => `${step.completeness}% -> ${Chain.format(step.payout)}`).join(", "));
+    Log.info("clocks", `accept ${Config.acceptSeconds}s, deliver ${Config.deliverSeconds}s, dispute ${Config.disputeSeconds}s`);
 
-    // Check the buyer holds enough USDC for every run
-    const needed = Config.capStroops * RUN_COUNT;
+    // Check the buyer holds enough USDC for the runs that pay the seller
+    const needed = Config.capStroops * 3n;
     const buyerUsdc = await Chain.usdcBalance(parties.buyer.publicKey());
     if (buyerUsdc < needed) {
         throw new Error(`Buyer holds ${Chain.format(buyerUsdc)} USDC but needs ${Chain.format(needed)}. Fund it at ${Config.faucetUrl}.`);
@@ -63,17 +66,17 @@ async function main(): Promise<void> {
     Log.heading("Starting balances");
     await printBalances(demo, state.deployment.contractId, "Before");
 
-    // Run the escrow the buyer never answers
-    Log.heading("Run A: lock, deliver, buyer silent, settle after the dispute window");
-    await runSilent(demo);
-
-    // Run the escrow the seller never delivers
-    Log.heading("Run B: lock, no delivery, refund after deliver-by");
-    await runRefunded(demo);
-
-    // Run the escrow the buyer acknowledges
-    Log.heading("Run C: lock, deliver, buyer acknowledges, settle at once");
+    // Run every outcome
+    Log.heading("Run A: accept, deliver, buyer acknowledges, settle at once");
     await runAcknowledged(demo);
+    Log.heading("Run B: accept, deliver, buyer silent, settle after the dispute window");
+    await runSilent(demo);
+    Log.heading(`Run C: accept, deliver, buyer disputes at ${Config.disputeCompleteness}%, settle at once`);
+    await runDisputed(demo);
+    Log.heading("Run D: seller never accepts, refund after accept-by");
+    await runNotAccepted(demo);
+    Log.heading("Run E: seller accepts but never delivers, refund after deliver-by");
+    await runNotDelivered(demo);
 
     // Show ending balances
     Log.heading("Ending balances");
@@ -85,11 +88,30 @@ async function main(): Promise<void> {
     Log.info("written to", path);
 }
 
-/** Locks and delivers an escrow, waits out the dispute window in silence and settles to the seller. */
-async function runSilent(demo: Demo): Promise<void> {
-    // Lock the cap and deliver a manifest
+/** Accepts and delivers an escrow, has the buyer acknowledge it and settles without waiting. */
+async function runAcknowledged(demo: Demo): Promise<void> {
+    // Lock, accept and deliver
     const escrowId = await lock(demo, "A");
+    await accept(demo, "A", escrowId);
     await deliver(demo, "A", escrowId);
+
+    // Acknowledge the delivery as the buyer
+    Log.step("Buyer verifies the artifact and acknowledges inside the dispute window");
+    const acknowledged = await demo.client.acknowledge(demo.parties.buyer, escrowId);
+    recordPartyStep(demo, "A", `acknowledge(${escrowId})`, "buyer", acknowledged);
+
+    // Settle immediately from an unrelated third account
+    Log.step("An unrelated account calls settle without waiting for the window");
+    const settled = await demo.client.settle(demo.parties.anyone, escrowId);
+    await close(demo, "A", escrowId, `settle(${escrowId})`, settled);
+}
+
+/** Accepts and delivers an escrow, waits out the dispute window in silence and settles at the cap. */
+async function runSilent(demo: Demo): Promise<void> {
+    // Lock, accept and deliver
+    const escrowId = await lock(demo, "B");
+    await accept(demo, "B", escrowId);
+    await deliver(demo, "B", escrowId);
 
     // Wait for the dispute window to close
     const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
@@ -98,93 +120,106 @@ async function runSilent(demo: Demo): Promise<void> {
 
     // Settle from an unrelated third account
     Log.step("An unrelated account calls settle");
-    const settled = await retryWhileEarly(() => demo.client.settle(demo.parties.anyone, escrowId), 8);
-    recordClose(demo, "A", `settle(${escrowId})`, settled);
-
-    // Print the resulting work record
-    await printRecord(demo, escrowId, settled.hash);
+    const settled = await retryWhileEarly(() => demo.client.settle(demo.parties.anyone, escrowId), EARLY_SETTLE);
+    await close(demo, "B", escrowId, `settle(${escrowId})`, settled);
 }
 
-/** Locks an escrow, lets deliver-by pass with no delivery and refunds the buyer. */
-async function runRefunded(demo: Demo): Promise<void> {
-    // Lock the cap
-    const escrowId = await lock(demo, "B");
-
-    // Wait for deliver-by to pass with no delivery
-    const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
-    Log.step("Seller never delivers; waiting for deliver-by to pass");
-    await Chain.waitForLedgerTime(escrow.deliverBy, "deliver-by");
-
-    // Refund from an unrelated third account
-    Log.step("An unrelated account calls refund");
-    const refunded = await retryWhileEarly(() => demo.client.refund(demo.parties.anyone, escrowId), 7);
-    recordClose(demo, "B", `refund(${escrowId})`, refunded);
-
-    // Print the resulting work record
-    await printRecord(demo, escrowId, refunded.hash);
-}
-
-/** Locks and delivers an escrow, has the buyer acknowledge it and settles without waiting. */
-async function runAcknowledged(demo: Demo): Promise<void> {
-    // Lock the cap and deliver a manifest
+/** Accepts and delivers an escrow, has the buyer dispute it at a quoted step and settles at that price. */
+async function runDisputed(demo: Demo): Promise<void> {
+    // Lock, accept and deliver
     const escrowId = await lock(demo, "C");
+    await accept(demo, "C", escrowId);
     await deliver(demo, "C", escrowId);
 
-    // Acknowledge the delivery as the buyer
-    Log.step("Buyer verifies the artifact and acknowledges inside the dispute window");
-    const acknowledged = await demo.client.acknowledge(demo.parties.buyer, escrowId);
-    Log.tx(acknowledged.hash);
-    Log.info("state", (await demo.client.get(escrowId, demo.parties.fees.publicKey())).state);
-    demo.evidence.addStep({
-        run: "C",
-        step: `acknowledge(${escrowId})`,
-        caller: "buyer (auth entry only)",
-        feePaidBy: "AgentKred fee-bump",
-        hash: acknowledged.hash,
-    });
+    // Dispute the delivery at the configured completeness as the buyer
+    Log.step(`Buyer finds the artifact ${Config.disputeCompleteness}% complete and disputes inside the window`);
+    const disputed = await demo.client.dispute(demo.parties.buyer, escrowId, Config.disputeCompleteness);
+    recordPartyStep(demo, "C", `dispute(${escrowId}, ${Config.disputeCompleteness})`, "buyer", disputed);
 
     // Settle immediately from an unrelated third account
     Log.step("An unrelated account calls settle without waiting for the window");
     const settled = await demo.client.settle(demo.parties.anyone, escrowId);
-    recordClose(demo, "C", `settle(${escrowId})`, settled);
-
-    // Print the resulting work record
-    await printRecord(demo, escrowId, settled.hash);
+    await close(demo, "C", escrowId, `settle(${escrowId})`, settled);
 }
 
-/** Locks one escrow for the configured cap and records the transaction. */
+/** Locks an escrow the seller never accepts and refunds the buyer after accept-by. */
+async function runNotAccepted(demo: Demo): Promise<void> {
+    // Lock the cap
+    const escrowId = await lock(demo, "D");
+
+    // Wait for accept-by to pass with no acceptance
+    const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
+    Log.step("Seller never accepts; waiting for accept-by to pass");
+    await Chain.waitForLedgerTime(escrow.acceptBy, "accept-by");
+
+    // Refund from an unrelated third account
+    Log.step("An unrelated account calls refund");
+    const refunded = await retryWhileEarly(() => demo.client.refund(demo.parties.anyone, escrowId), EARLY_REFUND_ACCEPT);
+    await close(demo, "D", escrowId, `refund(${escrowId})`, refunded);
+}
+
+/** Accepts an escrow the seller never delivers and refunds the buyer after deliver-by. */
+async function runNotDelivered(demo: Demo): Promise<void> {
+    // Lock and accept
+    const escrowId = await lock(demo, "E");
+    await accept(demo, "E", escrowId);
+
+    // Wait for deliver-by to pass with no delivery
+    const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
+    Log.step("Seller never delivers; waiting for deliver-by to pass");
+    await Chain.waitForLedgerTime(escrow.deliverBy!, "deliver-by");
+
+    // Refund from an unrelated third account
+    Log.step("An unrelated account calls refund");
+    const refunded = await retryWhileEarly(() => demo.client.refund(demo.parties.anyone, escrowId), EARLY_REFUND_DELIVER);
+    await close(demo, "E", escrowId, `refund(${escrowId})`, refunded);
+}
+
+/** Has the seller sign a fresh quote, checks it as the buyer, and locks it. */
 async function lock(demo: Demo, run: string): Promise<bigint> {
-    // Hash a quote document standing in for the seller's signed quote
-    Log.step("Buyer signs one auth entry; AgentKred submits the lock in a fee-bump");
-    const quote = {
-        run,
-        seller: demo.parties.seller.publicKey(),
-        cap: Config.capStroops.toString(),
-        deliverS: Config.deliverSeconds,
-        disputeS: Config.disputeSeconds,
-        nonce: Date.now(),
-    };
-    const quoteHash = sha256(JSON.stringify(quote));
-    Log.info("quote hash", quoteHash.toString("hex"));
+    // Sign a quote for a new job as the seller
+    Log.step("Seller signs a quote; buyer checks it and signs one auth entry; AgentKred submits the lock");
+    const quote = Quotes.sign(
+        {
+            seller: demo.parties.seller.publicKey(),
+            asset: Config.usdc.contractId(Config.networkPassphrase),
+            cap: Config.capStroops,
+            floor: Config.floorStroops,
+            schedule: Config.schedule,
+            acceptS: Config.acceptSeconds,
+            deliverS: Config.deliverSeconds,
+            disputeS: Config.disputeSeconds,
+            jobId: randomBytes(32),
+        },
+        demo.parties.seller,
+    );
+
+    // Check the quote's hash and signature before locking
+    if (!Quotes.verify(quote)) {
+        throw new Error("The seller's quote failed verification");
+    }
+    Log.info("job id", quote.terms.jobId.toString("hex"));
+    Log.info("quote hash", quote.quoteHash.toString("hex"));
 
     // Submit the lock and print the new escrow
-    const locked = await demo.client.lock(demo.parties.buyer, demo.parties.seller.publicKey(), quoteHash);
+    const locked = await demo.client.lock(demo.parties.buyer, quote);
     const escrow = await demo.client.get(locked.escrowId, demo.parties.fees.publicKey());
     Log.info("escrow id", locked.escrowId.toString());
     Log.info("state", escrow.state);
-    Log.info("deliver-by", `ledger time ${escrow.deliverBy}`);
-    Log.tx(locked.hash);
-
-    // Record the lock
-    demo.evidence.addStep({
-        run,
-        step: `lock -> escrow ${locked.escrowId}`,
-        caller: "buyer (auth entry only)",
-        feePaidBy: "AgentKred fee-bump",
-        hash: locked.hash,
-    });
+    Log.info("accept-by", `ledger time ${escrow.acceptBy}`);
+    recordPartyStep(demo, run, `lock -> escrow ${locked.escrowId}`, "buyer", locked);
 
     return locked.escrowId;
+}
+
+/** Accepts the job as the seller and records the transaction. */
+async function accept(demo: Demo, run: string, escrowId: bigint): Promise<void> {
+    // Submit the acceptance and print the deliver-by deadline
+    Log.step("Seller accepts the job");
+    const accepted = await demo.client.accept(demo.parties.seller, escrowId);
+    const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
+    Log.info("deliver-by", `ledger time ${escrow.deliverBy}`);
+    recordPartyStep(demo, run, `accept(${escrowId})`, "seller", accepted);
 }
 
 /** Delivers a manifest hash as the seller and records the transaction. */
@@ -199,24 +234,29 @@ async function deliver(demo: Demo, run: string, escrowId: bigint): Promise<void>
     const manifestHash = sha256(JSON.stringify(manifest));
     Log.info("manifest hash", manifestHash.toString("hex"));
 
-    // Submit the delivery and print the new state
+    // Submit the delivery and print the dispute deadline
     const delivered = await demo.client.deliver(demo.parties.seller, escrowId, manifestHash);
-    Log.tx(delivered.hash);
-    Log.info("state", (await demo.client.get(escrowId, demo.parties.fees.publicKey())).state);
+    const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
+    Log.info("dispute-by", `ledger time ${escrow.disputeBy}`);
+    recordPartyStep(demo, run, `deliver(${escrowId})`, "seller", delivered);
+}
 
-    // Record the delivery
+/** Prints and records a buyer or seller call that AgentKred fee-bumped. */
+function recordPartyStep(demo: Demo, run: string, step: string, party: string, submitted: Submitted): void {
+    // Print the transaction and add it to the evidence
+    Log.tx(submitted.hash);
     demo.evidence.addStep({
         run,
-        step: `deliver(${escrowId})`,
-        caller: "seller (auth entry only)",
+        step,
+        caller: `${party} (auth entry only)`,
         feePaidBy: "AgentKred fee-bump",
-        hash: delivered.hash,
+        hash: submitted.hash,
     });
 }
 
-/** Prints and records a settle or refund sent by the unrelated third account. */
-function recordClose(demo: Demo, run: string, step: string, submitted: Submitted): void {
-    // Print the transaction and add it to the evidence
+/** Records the settle or refund sent by the third account, then prints and records the work record. */
+async function close(demo: Demo, run: string, escrowId: bigint, step: string, submitted: Submitted): Promise<void> {
+    // Print the closing transaction and add it to the evidence
     Log.tx(submitted.hash);
     demo.evidence.addStep({
         run,
@@ -225,13 +265,10 @@ function recordClose(demo: Demo, run: string, step: string, submitted: Submitted
         feePaidBy: "third account",
         hash: submitted.hash,
     });
-}
 
-/** Reads the closed escrow, then prints and records its work record. */
-async function printRecord(demo: Demo, escrowId: bigint, closeTx: string): Promise<void> {
-    // Read the closed escrow and build its record
+    // Build the work record from the closed escrow and its terminal event
     const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
-    const record = WorkRecords.build(escrowId, escrow, closeTx);
+    const record = WorkRecords.build(escrowId, escrow, submitted.hash, demo.client.terminalEvent(submitted));
 
     // Print the record and add it to the evidence
     WorkRecords.print(record);
