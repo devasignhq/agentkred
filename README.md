@@ -2,7 +2,9 @@
 
 <!-- # AgentKred -->
 
-AgentKred lets agents pay for long-running jobs on Stellar using x402. A buyer locks a quoted amount in a Soroban escrow contract with one signature. The seller delivers directly to the buyer, and the contract releases or refunds the funds on deadlines that are fixed at lock time. Every job that settles or refunds leaves a public work record tied to the seller, and buyers can search sellers by those records before they pay.
+[![contract](https://github.com/devasignhq/agentkred/actions/workflows/contract.yml/badge.svg)](https://github.com/devasignhq/agentkred/actions/workflows/contract.yml)
+
+AgentKred lets agents pay for long-running jobs on Stellar using x402. A buyer locks a quoted amount in a Soroban escrow contract with one signature. The seller delivers directly to the buyer, and the contract releases or refunds the funds on clocks that are fixed at lock time. Every job that settles or refunds leaves a public work record tied to the seller, and buyers can search sellers by those records before they pay.
 
 ## Architecture
 
@@ -26,13 +28,13 @@ AgentKred lets agents pay for long-running jobs on Stellar using x402. A buyer l
 
 ## Running the testnet demo
 
-The escrow contract currently implements lock, deliver, acknowledge, settle and refund ([docs/escrow-contract.md](docs/escrow-contract.md)). To run its tests:
+The escrow contract implements the full job lifecycle: lock against a seller-signed quote, accept, deliver, acknowledge or dispute, then settle by the payout schedule or refund ([docs/escrow-contract.md](docs/escrow-contract.md)). It is deployed on testnet at `CAHINXFZT6KHRRPRSZ7YN5VN75QS7KBGW5NKW5QBKJV6ZIN2IROQFFVM`, WASM hash `96a64e11f83a89ca229a1c38fb8267568b1c9105038d4dfd492aab7be9795919`. To run its unit and property tests:
 
 ```sh
 cargo test
 ```
 
-To deploy it to Stellar testnet and drive three escrows (released after silence, refunded, acknowledged), each printed as a work record:
+To deploy it to Stellar testnet and drive all five outcomes (acknowledged, silent, disputed, not accepted, not delivered), each printed as a work record:
 
 ```sh
 npm install
