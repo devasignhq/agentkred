@@ -16,4 +16,12 @@ pub enum Error {
     DeliverDeadlineNotPassed = 7,
     DisputeWindowOpen = 8,
     DisputeWindowClosed = 9,
+    QuoteHashMismatch = 10,
+    InvalidSeller = 11,
+    InvalidFloor = 12,
+    InvalidSchedule = 13,
+    CompletenessNotInSchedule = 14,
+    AcceptDeadlinePassed = 15,
+    AcceptDeadlineNotPassed = 16,
+    PayoutOutOfRange = 17,
 }
