@@ -27,7 +27,7 @@ The seller's signed quote is a `QuoteTerms` struct:
 | `dispute_s` | u64 | Seconds the buyer has to acknowledge or dispute, counted from delivery |
 | `job_id` | bytes32 | The seller's id for this job |
 
-The **quote hash** is `sha256` of the XDR encoding of the `QuoteTerms` value: an `ScMap` with the field names as symbol keys in sorted order, and each `PayoutStep` encoded the same way. The seller signs the 32-byte quote hash with the ed25519 key of its `seller` account. `quote_hash(terms)` returns the hash the contract computes, so a client can check its own encoding against it. The test vector in `quote_hash_matches_the_cross_language_vector` is asserted by both the Rust tests and [the TypeScript encoder's tests](../examples/cli-demo/tests/quote.test.ts).
+The **quote hash** is `sha256` of the XDR encoding of the `QuoteTerms` value: an `ScMap` with the field names as symbol keys in sorted order, and each `PayoutStep` encoded the same way. The seller signs the 32-byte quote hash with the ed25519 key of its `seller` account. `quote_hash(terms)` returns the hash the contract computes, so a client can check its own encoding against it. The test vector in `quote_hash_matches_the_cross_language_vector` is asserted by both the Rust tests and [the TypeScript encoder's tests](../packages/shared/tests/quote.test.ts).
 
 The signature is checked against the seller account's master key. If an account has disabled its master key, quotes it signs with that old key still verify. That doesn't let anyone else put the seller to work: `accept` and `deliver` need the seller's real account authorization, and an escrow the seller never accepts is refunded at accept-by.
 

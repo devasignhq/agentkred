@@ -59,4 +59,4 @@ The run takes about six minutes. Run it again whenever you like. Each run locks 
 
 The quoted terms are set in [src/config.ts](src/config.ts): a 1 USDC cap, a 0.2 USDC floor, a schedule paying 0.2 at 0%, 0.6 at 50% and 1 at 100%, and clocks of 45s to accept, 60s to deliver and 60s to dispute.
 
-`npm test` runs the quote encoder's tests, including the quote-hash vector the contract's Rust tests also assert. Set `AGENTKRED_RPC_URL` to use a different testnet RPC endpoint.
+The code that talks to the chain and the contract lives in [`@agentkred/shared`](../../packages/shared). This folder holds only the demo itself. Set `AGENTKRED_RPC_URL` to use a different testnet RPC endpoint.
