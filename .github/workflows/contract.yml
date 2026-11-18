@@ -6,6 +6,7 @@ on:
         branches: [main]
         paths:
             - "contracts/**"
+            - "packages/shared/**"
             - "examples/cli-demo/**"
             - "Cargo.toml"
             - "Cargo.lock"
@@ -15,6 +16,7 @@ on:
     pull_request:
         paths:
             - "contracts/**"
+            - "packages/shared/**"
             - "examples/cli-demo/**"
             - "Cargo.toml"
             - "Cargo.lock"
@@ -46,9 +48,10 @@ jobs:
                   node-version: 24
                   cache: npm
 
-            # Check the TypeScript quote encoder against the hash vector the Rust tests assert
+            # Typecheck and test the shared package, including the quote-hash vector the Rust tests assert, and the demo
             - run: npm ci
-            - run: npm test -w @agentkred/cli-demo
+            - run: npm run typecheck -w @agentkred/shared -w @agentkred/cli-demo
+            - run: npm test -w @agentkred/shared -w @agentkred/cli-demo
 
     coverage:
         runs-on: ubuntu-latest
