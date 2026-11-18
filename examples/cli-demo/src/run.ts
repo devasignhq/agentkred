@@ -2,15 +2,13 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { Keypair } from "@stellar/stellar-sdk";
-import { Chain, sleep } from "./chain.js";
+import { Amounts, ESCROW_ERRORS, EscrowClient, Quotes, SimulationError, Submitted, WorkRecords, sleep } from "@agentkred/shared";
+import { chain, submitter } from "./clients.js";
 import { Config } from "./config.js";
-import { ESCROW_ERRORS, EscrowClient } from "./escrowClient.js";
 import { Evidence } from "./evidence.js";
 import { Log } from "./log.js";
-import { Quotes } from "./quote.js";
 import { DemoState } from "./state.js";
-import { SimulationError, Submitted } from "./submitter.js";
-import { WorkRecords } from "./workRecord.js";
+import { WorkRecordPrinter } from "./workRecord.js";
 
 interface Parties {
     buyer: Keypair;
@@ -42,7 +40,7 @@ async function main(): Promise<void> {
         fees: DemoState.keypair(state, "fees"),
     };
     const demo: Demo = {
-        client: new EscrowClient(state.deployment.contractId, { channel: parties.channel, fees: parties.fees }),
+        client: new EscrowClient(state.deployment.contractId, submitter, { channel: parties.channel, fees: parties.fees }),
         parties,
         evidence: new Evidence(state.deployment),
     };
@@ -51,15 +49,15 @@ async function main(): Promise<void> {
     Log.heading("AgentKred escrow on Stellar testnet");
     Log.info("contract", state.deployment.contractId);
     Log.info("explorer", `${Config.explorerUrl}/contract/${state.deployment.contractId}`);
-    Log.info("cap / floor", `${Chain.format(Config.capStroops)} / ${Chain.format(Config.floorStroops)} USDC`);
-    Log.info("schedule", Config.schedule.map((step) => `${step.completeness}% -> ${Chain.format(step.payout)}`).join(", "));
+    Log.info("cap / floor", `${Amounts.format(Config.capStroops)} / ${Amounts.format(Config.floorStroops)} USDC`);
+    Log.info("schedule", Config.schedule.map((step) => `${step.completeness}% -> ${Amounts.format(step.payout)}`).join(", "));
     Log.info("clocks", `accept ${Config.acceptSeconds}s, deliver ${Config.deliverSeconds}s, dispute ${Config.disputeSeconds}s`);
 
     // Check the buyer holds enough USDC for the runs that pay the seller
     const needed = Config.capStroops * 3n;
-    const buyerUsdc = await Chain.usdcBalance(parties.buyer.publicKey());
+    const buyerUsdc = await chain.usdcBalance(parties.buyer.publicKey());
     if (buyerUsdc < needed) {
-        throw new Error(`Buyer holds ${Chain.format(buyerUsdc)} USDC but needs ${Chain.format(needed)}. Fund it at ${Config.faucetUrl}.`);
+        throw new Error(`Buyer holds ${Amounts.format(buyerUsdc)} USDC but needs ${Amounts.format(needed)}. Fund it at ${Config.faucetUrl}.`);
     }
 
     // Show starting balances
@@ -116,7 +114,7 @@ async function runSilent(demo: Demo): Promise<void> {
     // Wait for the dispute window to close
     const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
     Log.step("Buyer stays silent; waiting for the dispute window to close");
-    await Chain.waitForLedgerTime(escrow.disputeBy!, "dispute window");
+    await waitFor(escrow.disputeBy!, "dispute window");
 
     // Settle from an unrelated third account
     Log.step("An unrelated account calls settle");
@@ -150,7 +148,7 @@ async function runNotAccepted(demo: Demo): Promise<void> {
     // Wait for accept-by to pass with no acceptance
     const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
     Log.step("Seller never accepts; waiting for accept-by to pass");
-    await Chain.waitForLedgerTime(escrow.acceptBy, "accept-by");
+    await waitFor(escrow.acceptBy, "accept-by");
 
     // Refund from an unrelated third account
     Log.step("An unrelated account calls refund");
@@ -167,7 +165,7 @@ async function runNotDelivered(demo: Demo): Promise<void> {
     // Wait for deliver-by to pass with no delivery
     const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
     Log.step("Seller never delivers; waiting for deliver-by to pass");
-    await Chain.waitForLedgerTime(escrow.deliverBy!, "deliver-by");
+    await waitFor(escrow.deliverBy!, "deliver-by");
 
     // Refund from an unrelated third account
     Log.step("An unrelated account calls refund");
@@ -182,7 +180,7 @@ async function lock(demo: Demo, run: string): Promise<bigint> {
     const quote = Quotes.sign(
         {
             seller: demo.parties.seller.publicKey(),
-            asset: Config.usdc.contractId(Config.networkPassphrase),
+            asset: Config.network.usdc.contractId(Config.network.networkPassphrase),
             cap: Config.capStroops,
             floor: Config.floorStroops,
             schedule: Config.schedule,
@@ -268,10 +266,10 @@ async function close(demo: Demo, run: string, escrowId: bigint, step: string, su
 
     // Build the work record from the closed escrow and its terminal event
     const escrow = await demo.client.get(escrowId, demo.parties.fees.publicKey());
-    const record = WorkRecords.build(escrowId, escrow, submitted.hash, demo.client.terminalEvent(submitted));
+    const record = WorkRecords.build(escrowId, escrow, submitted.hash, demo.client.terminalEvent(submitted), Config.network.usdc.getCode());
 
     // Print the record and add it to the evidence
-    WorkRecords.print(record);
+    WorkRecordPrinter.print(record);
     demo.evidence.addRecord(record);
 }
 
@@ -289,7 +287,7 @@ async function retryWhileEarly(call: () => Promise<Submitted>, earlyCode: number
 
             // Wait for the next ledger and try again
             Log.status(`${ESCROW_ERRORS[earlyCode]}; retrying on the next ledger`);
-            await sleep(Config.pollIntervalMs);
+            await sleep(Config.network.pollIntervalMs);
         }
     }
 }
@@ -305,11 +303,21 @@ async function printBalances(demo: Demo, contractId: string, label: string): Pro
 
     // Print each balance and add it to the evidence
     for (const [name, address, hasXlm] of rows) {
-        const usdc = Chain.format(await Chain.usdcBalance(address));
-        const xlm = hasXlm ? `, ${Chain.format(await Chain.xlmBalance(address))} XLM` : "";
+        const usdc = Amounts.format(await chain.usdcBalance(address));
+        const xlm = hasXlm ? `, ${Amounts.format(await chain.xlmBalance(address))} XLM` : "";
         Log.info(name, `${usdc} USDC${xlm}`);
         demo.evidence.addNote(`${label}: ${name} \`${address}\` holds ${usdc} USDC${xlm}`);
     }
+}
+
+/** Waits until ledger time reaches `target`, printing a countdown. */
+async function waitFor(target: number, label: string): Promise<void> {
+    // Poll ledger time, rewriting the countdown line on every tick
+    const reached = await chain.waitForLedgerTime(target, (now) => Log.status(`${label}: ${target - now}s left (ledger time ${now})`));
+
+    // Close the countdown line
+    Log.status(`${label}: reached at ledger time ${reached}`);
+    Log.endStatus();
 }
 
 /** Returns the SHA-256 digest of `text`. */

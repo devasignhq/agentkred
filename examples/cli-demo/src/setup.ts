@@ -3,11 +3,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { Address, Contract, Keypair, Operation, nativeToScVal, xdr } from "@stellar/stellar-sdk";
-import { Chain } from "./chain.js";
+import { Amounts } from "@agentkred/shared";
+import { chain, submitter } from "./clients.js";
 import { Config } from "./config.js";
 import { Log } from "./log.js";
 import { Deployment, DemoState, StoredState } from "./state.js";
-import { Submitter } from "./submitter.js";
 
 /** Runs every setup stage and prints what the buyer still needs. */
 async function main(): Promise<void> {
@@ -32,8 +32,8 @@ async function main(): Promise<void> {
 
     // Check Circle's USDC contract is live on testnet
     Log.heading("Checking testnet USDC");
-    const usdcContract = Config.usdc.contractId(Config.networkPassphrase);
-    await Chain.server.getContractInstance(usdcContract);
+    const usdcContract = Config.network.usdc.contractId(Config.network.networkPassphrase);
+    await chain.server.getContractInstance(usdcContract);
     Log.info("USDC contract", usdcContract);
 
     // Deploy the escrow contract when missing, or upgrade it when out of date
@@ -43,9 +43,9 @@ async function main(): Promise<void> {
 
     // Print the buyer's funding instructions
     Log.heading("Next step");
-    const buyerUsdc = await Chain.usdcBalance(buyer.publicKey());
+    const buyerUsdc = await chain.usdcBalance(buyer.publicKey());
     Log.info("buyer", buyer.publicKey());
-    Log.info("buyer USDC", Chain.format(buyerUsdc));
+    Log.info("buyer USDC", Amounts.format(buyerUsdc));
     if (buyerUsdc < Config.capStroops * 2n) {
         console.log(`\n  Fund the buyer with testnet USDC at ${Config.faucetUrl} (network: Stellar Testnet),`);
         console.log("  using the buyer address above, then run `npm run demo`.");
@@ -57,13 +57,13 @@ async function main(): Promise<void> {
 /** Funds `keypair` from Friendbot unless its account already exists. */
 async function ensureFunded(label: string, keypair: Keypair): Promise<void> {
     // Skip accounts that already exist
-    if (await Chain.accountExists(keypair.publicKey())) {
+    if (await chain.accountExists(keypair.publicKey())) {
         Log.info(label, `${keypair.publicKey()} (exists)`);
         return;
     }
 
     // Request testnet XLM
-    await Chain.fund(keypair.publicKey());
+    await chain.fund(keypair.publicKey());
     Log.info(label, `${keypair.publicKey()} (funded)`);
 }
 
@@ -72,7 +72,7 @@ async function openSponsoredAccounts(state: StoredState, fees: Keypair, accounts
     // Keep only the accounts that do not exist yet
     const missing: Keypair[] = [];
     for (const keypair of accounts) {
-        if (!(await Chain.accountExists(keypair.publicKey()))) {
+        if (!(await chain.accountExists(keypair.publicKey()))) {
             missing.push(keypair);
         }
     }
@@ -87,12 +87,12 @@ async function openSponsoredAccounts(state: StoredState, fees: Keypair, accounts
     const operations = missing.flatMap((keypair) => [
         Operation.beginSponsoringFutureReserves({ sponsoredId: keypair.publicKey() }),
         Operation.createAccount({ destination: keypair.publicKey(), startingBalance: "0" }),
-        Operation.changeTrust({ asset: Config.usdc, source: keypair.publicKey() }),
+        Operation.changeTrust({ asset: Config.network.usdc, source: keypair.publicKey() }),
         Operation.endSponsoringFutureReserves({ source: keypair.publicKey() }),
     ]);
 
     // Submit with the fee account as source and every new account co-signing
-    const submitted = await Submitter.classic(operations, fees, missing);
+    const submitted = await submitter.classic(operations, fees, missing);
     state.setupTxs.push(submitted.hash);
     missing.forEach((keypair) => Log.info("opened", keypair.publicKey()));
     Log.tx(submitted.hash);
@@ -117,7 +117,7 @@ async function ensureDeployed(current: Deployment | undefined, fees: Keypair): P
 
     // Upload the WASM
     Log.step("Uploading WASM");
-    const upload = await Submitter.direct(Operation.uploadContractWasm({ wasm }), fees);
+    const upload = await submitter.direct(Operation.uploadContractWasm({ wasm }), fees);
     Log.info("wasm hash", wasmHash);
     Log.tx(upload.hash);
 
@@ -128,7 +128,7 @@ async function ensureDeployed(current: Deployment | undefined, fees: Keypair): P
 
     // Deploy a fresh contract instance with the fee account as admin
     Log.step("Deploying contract");
-    const deploy = await Submitter.direct(
+    const deploy = await submitter.direct(
         Operation.createCustomContract({
             address: Address.fromString(fees.publicKey()),
             wasmHash: Buffer.from(wasmHash, "hex"),
@@ -149,7 +149,7 @@ async function ensureDeployed(current: Deployment | undefined, fees: Keypair): P
 async function liveWasmHash(contractId: string): Promise<string | null> {
     // Fetch the running code and hash it, treating a missing contract as null
     try {
-        const wasm = await Chain.server.getContractWasmByContractId(contractId);
+        const wasm = await chain.server.getContractWasmByContractId(contractId);
         return createHash("sha256").update(wasm).digest("hex");
     } catch {
         return null;
@@ -161,7 +161,7 @@ async function upgrade(current: Deployment, wasmHash: string, uploadTx: string, 
     // Call upgrade as the admin
     Log.step("Upgrading contract");
     const contract = new Contract(current.contractId);
-    const upgraded = await Submitter.direct(
+    const upgraded = await submitter.direct(
         contract.call("upgrade", xdr.ScVal.scvBytes(Buffer.from(wasmHash, "hex"))),
         admin,
     );

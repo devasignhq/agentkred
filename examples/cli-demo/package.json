@@ -12,6 +12,7 @@
         "test": "vitest run"
     },
     "dependencies": {
+        "@agentkred/shared": "0.0.0",
         "@stellar/stellar-sdk": "17.3.0"
     },
     "devDependencies": {

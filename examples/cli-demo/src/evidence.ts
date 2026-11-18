@@ -2,9 +2,9 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { WorkRecord, WorkRecords } from "@agentkred/shared";
 import { Config } from "./config.js";
 import { Deployment } from "./state.js";
-import { WorkRecord, WorkRecords } from "./workRecord.js";
 
 export interface EvidenceStep {
     run: string;

@@ -1,4 +1,4 @@
-// Builds, signs and submits demo transactions, including fee-bumped calls signed only through auth entries.
+// Builds, signs and submits Soroban and classic transactions, including fee-bumped calls signed only through auth entries.
 
 import {
     Address,
@@ -12,7 +12,6 @@ import {
     xdr,
 } from "@stellar/stellar-sdk";
 import { Chain } from "./chain.js";
-import { Config } from "./config.js";
 
 export interface Submitted {
     hash: string;
@@ -21,6 +20,9 @@ export interface Submitted {
 }
 
 export class Submitter {
+    /** Submits through the RPC endpoint and network settings of `chain`. */
+    constructor(private readonly chain: Chain) {}
+
     /**
      * Submits a contract call from AgentKred's channel account inside a fee-bump paid by the fee account.
      * Buyers and sellers sign only their auth entries, so they never need XLM.
@@ -30,7 +32,7 @@ export class Submitter {
      * @param fees - AgentKred account that pays the fee-bump
      * @returns The fee-bump transaction hash and the call's return value
      */
-    static async sponsored(
+    async sponsored(
         operation: xdr.Operation,
         authSigners: Keypair[],
         channel: Keypair,
@@ -47,7 +49,7 @@ export class Submitter {
         const recording = await this.simulate(await this.build(channel.publicKey(), operation));
 
         // Sign each address auth entry with its owner's key
-        const validUntil = (await Chain.ledgerSequence()) + Config.authValidityLedgers;
+        const validUntil = (await this.chain.ledgerSequence()) + this.chain.config.authValidityLedgers;
         const auth = await Promise.all(
             (recording.result?.auth ?? []).map((entry) => this.signAuthEntry(entry, authSigners, validUntil)),
         );
@@ -62,32 +64,32 @@ export class Submitter {
         prepared.sign(channel);
 
         // Wrap it in a fee-bump paid by the fee account
-        const bump = TransactionBuilder.buildFeeBumpTransaction(fees, prepared.fee, prepared, Config.networkPassphrase);
+        const bump = TransactionBuilder.buildFeeBumpTransaction(fees, prepared.fee, prepared, this.chain.config.networkPassphrase);
         bump.sign(fees);
 
         return this.send(bump);
     }
 
     /** Submits a contract call sourced and paid for by `source` itself. */
-    static async direct(operation: xdr.Operation, source: Keypair): Promise<Submitted> {
+    async direct(operation: xdr.Operation, source: Keypair): Promise<Submitted> {
         // Simulate, attach resources and sign
         const tx = await this.build(source.publicKey(), operation);
-        const prepared = await Chain.server.prepareTransaction(tx);
+        const prepared = await this.chain.server.prepareTransaction(tx);
         prepared.sign(source);
 
         return this.send(prepared);
     }
 
     /** Submits classic operations sourced by `source` and signed by every key in `signers`. */
-    static async classic(operations: xdr.Operation[], source: Keypair, signers: Keypair[]): Promise<Submitted> {
+    async classic(operations: xdr.Operation[], source: Keypair, signers: Keypair[]): Promise<Submitted> {
         // Build the transaction with every operation
-        const account = await Chain.server.getAccount(source.publicKey());
+        const account = await this.chain.server.getAccount(source.publicKey());
         const builder = new TransactionBuilder(account, {
-            fee: Config.baseFee,
-            networkPassphrase: Config.networkPassphrase,
+            fee: this.chain.config.baseFee,
+            networkPassphrase: this.chain.config.networkPassphrase,
         });
         operations.forEach((operation) => builder.addOperation(operation));
-        const tx = builder.setTimeout(Config.txTimeoutSeconds).build();
+        const tx = builder.setTimeout(this.chain.config.txTimeoutSeconds).build();
 
         // Sign with the source and every extra signer
         tx.sign(source, ...signers);
@@ -96,7 +98,7 @@ export class Submitter {
     }
 
     /** Simulates a read-only contract call and returns its result value. */
-    static async read(operation: xdr.Operation, source: string): Promise<xdr.ScVal> {
+    async read(operation: xdr.Operation, source: string): Promise<xdr.ScVal> {
         // Simulate the call and return its result
         const simulation = await this.simulate(await this.build(source, operation));
         if (!simulation.result) {
@@ -107,22 +109,22 @@ export class Submitter {
     }
 
     /** Builds a single-operation transaction from `source`. */
-    private static async build(source: string, operation: xdr.Operation): Promise<Transaction> {
+    private async build(source: string, operation: xdr.Operation): Promise<Transaction> {
         // Load the source account and build the transaction
-        const account = await Chain.server.getAccount(source);
+        const account = await this.chain.server.getAccount(source);
         return new TransactionBuilder(account, {
-            fee: Config.baseFee,
-            networkPassphrase: Config.networkPassphrase,
+            fee: this.chain.config.baseFee,
+            networkPassphrase: this.chain.config.networkPassphrase,
         })
             .addOperation(operation)
-            .setTimeout(Config.txTimeoutSeconds)
+            .setTimeout(this.chain.config.txTimeoutSeconds)
             .build();
     }
 
     /** Simulates a transaction and throws the contract error when simulation fails. */
-    private static async simulate(tx: Transaction): Promise<rpc.Api.SimulateTransactionSuccessResponse> {
+    private async simulate(tx: Transaction): Promise<rpc.Api.SimulateTransactionSuccessResponse> {
         // Simulate and surface failures as errors
-        const simulation = await Chain.server.simulateTransaction(tx);
+        const simulation = await this.chain.server.simulateTransaction(tx);
         if (rpc.Api.isSimulationError(simulation)) {
             throw new SimulationError(simulation.error);
         }
@@ -131,7 +133,7 @@ export class Submitter {
     }
 
     /** Signs an address-credential auth entry with the matching keypair. */
-    private static async signAuthEntry(
+    private async signAuthEntry(
         entry: xdr.SorobanAuthorizationEntry,
         signers: Keypair[],
         validUntil: number,
@@ -149,19 +151,19 @@ export class Submitter {
             throw new Error(`No signer provided for auth entry of ${address}`);
         }
 
-        return authorizeEntry(entry, signer, validUntil, Config.networkPassphrase);
+        return authorizeEntry(entry, signer, validUntil, this.chain.config.networkPassphrase);
     }
 
     /** Sends a signed transaction and waits for it to succeed. */
-    private static async send(tx: Transaction | FeeBumpTransaction): Promise<Submitted> {
+    private async send(tx: Transaction | FeeBumpTransaction): Promise<Submitted> {
         // Send the transaction and fail on immediate rejection
-        const sent = await Chain.server.sendTransaction(tx);
+        const sent = await this.chain.server.sendTransaction(tx);
         if (sent.status === "ERROR" || sent.status === "TRY_AGAIN_LATER") {
             throw new Error(`Transaction rejected with status ${sent.status}: ${sent.errorResult?.toXDR("base64") ?? ""}`);
         }
 
         // Wait for confirmation and return the hash, value and contract events
-        const result = await Chain.confirm(sent.hash);
+        const result = await this.chain.confirm(sent.hash);
         return { hash: sent.hash, returnValue: result.returnValue, events: result.events?.contractEventsXdr.flat() ?? [] };
     }
 }

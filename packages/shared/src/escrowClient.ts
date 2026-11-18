@@ -59,8 +59,13 @@ export const ESCROW_ERRORS: Record<number, string> = {
 export class EscrowClient {
     private readonly contract: Contract;
 
-    /** Binds the client to a deployed escrow contract and AgentKred's sponsoring accounts. */
-    constructor(readonly contractId: string, private readonly sponsor: Sponsor) {
+    /**
+     * Binds the client to a deployed escrow contract.
+     * @param contractId - The escrow contract address
+     * @param submitter - Submits and simulates the contract calls
+     * @param sponsor - AgentKred's channel and fee accounts for sponsored calls
+     */
+    constructor(readonly contractId: string, private readonly submitter: Submitter, private readonly sponsor: Sponsor) {
         this.contract = new Contract(contractId);
     }
 
@@ -81,7 +86,7 @@ export class EscrowClient {
         );
 
         // Submit through AgentKred's fee-bump and read back the escrow id
-        const submitted = await Submitter.sponsored(operation, [buyer], this.sponsor.channel, this.sponsor.fees);
+        const submitted = await this.submitter.sponsored(operation, [buyer], this.sponsor.channel, this.sponsor.fees);
         return { ...submitted, escrowId: BigInt(scValToNative(submitted.returnValue!)) };
     }
 
@@ -107,18 +112,18 @@ export class EscrowClient {
 
     /** Settles an acknowledged, disputed or silently closed escrow from any account, which pays its own fee. */
     async settle(caller: Keypair, escrowId: bigint): Promise<Submitted> {
-        return Submitter.direct(this.contract.call("settle", this.id(escrowId)), caller);
+        return this.submitter.direct(this.contract.call("settle", this.id(escrowId)), caller);
     }
 
     /** Refunds an unaccepted or undelivered escrow from any account, which pays its own fee. */
     async refund(caller: Keypair, escrowId: bigint): Promise<Submitted> {
-        return Submitter.direct(this.contract.call("refund", this.id(escrowId)), caller);
+        return this.submitter.direct(this.contract.call("refund", this.id(escrowId)), caller);
     }
 
     /** Reads an escrow's current state through simulation. */
     async get(escrowId: bigint, reader: string): Promise<EscrowView> {
         // Simulate get_escrow and convert the result
-        const value = await Submitter.read(this.contract.call("get_escrow", this.id(escrowId)), reader);
+        const value = await this.submitter.read(this.contract.call("get_escrow", this.id(escrowId)), reader);
         const raw = scValToNative(value);
 
         // Map the contract struct into a view
@@ -187,7 +192,7 @@ export class EscrowClient {
 
     /** Submits a party's call through AgentKred's fee-bump, signing only that party's auth entry. */
     private sponsored(signer: Keypair, method: string, ...args: xdr.ScVal[]): Promise<Submitted> {
-        return Submitter.sponsored(this.contract.call(method, ...args), [signer], this.sponsor.channel, this.sponsor.fees);
+        return this.submitter.sponsored(this.contract.call(method, ...args), [signer], this.sponsor.channel, this.sponsor.fees);
     }
 
     /** Encodes an escrow id as the contract's u64. */
