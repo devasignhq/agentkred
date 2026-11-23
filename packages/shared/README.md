@@ -1,6 +1,6 @@
 # @agentkred/shared
 
-Chain code shared by the AgentKred server, the buyer SDK, the seller middleware and the demo.
+Code shared by the AgentKred server, the buyer SDK, the seller middleware and the demo.
 
 | Export | What it does |
 | --- | --- |
@@ -9,6 +9,11 @@ Chain code shared by the AgentKred server, the buyer SDK, the seller middleware 
 | `EscrowClient` | Calls the escrow contract (`lock`, `accept`, `deliver`, `acknowledge`, `dispute`, `settle`, `refund`), reads escrows and parses the settle or refund event that closed one |
 | `Quotes` | Encodes `QuoteTerms` exactly as the contract does, hashes them, and signs and verifies the seller's quote signature |
 | `WorkRecords` | Builds a work record from a closed escrow and its terminal event |
+| `EscrowEvents` | Decodes the contract's events into typed objects |
+| `AuthEntries` | Signs a contract call tree as a Soroban auth entry without simulating, and reads one back: who signed which call |
+| `Listings` | Signs and verifies a seller's listing with its pay-to key |
+| `Manifests` | Computes the manifest hash a seller passes to `deliver` |
+| `Webhooks` | Signs and verifies AgentKred's webhook bodies |
 | `TESTNET`, `NetworkConfig` | Network settings every client is built from |
 | `ESCROW_ERRORS`, `SimulationError` | The contract's error names, and the contract error code carried by a failed simulation |
 

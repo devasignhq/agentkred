@@ -15,6 +15,7 @@ import { Chain } from "./chain.js";
 
 export interface Submitted {
     hash: string;
+    ledger: number;
     returnValue?: xdr.ScVal;
     events: xdr.ContractEvent[];
 }
@@ -38,25 +39,34 @@ export class Submitter {
         channel: Keypair,
         fees: Keypair,
     ): Promise<Submitted> {
-        // Extract the host function from the operation
-        const body = operation.body;
-        if (body.type !== "invokeHostFunction") {
-            throw new Error("Sponsored submission needs an invokeHostFunction operation");
-        }
-        const hostFunction = body.invokeHostFunctionOp.hostFunction;
-
-        // Simulate once to discover the auth entries the call needs
-        const recording = await this.simulate(await this.build(channel.publicKey(), operation));
-
-        // Sign each address auth entry with its owner's key
+        // Discover the auth entries the call needs and sign each with its owner's key
+        const entries = await this.authEntries(operation, channel.publicKey());
         const validUntil = (await this.chain.ledgerSequence()) + this.chain.config.authValidityLedgers;
-        const auth = await Promise.all(
-            (recording.result?.auth ?? []).map((entry) => this.signAuthEntry(entry, authSigners, validUntil)),
-        );
+        const auth = await Promise.all(entries.map((entry) => this.signAuthEntry(entry, authSigners, validUntil)));
 
-        // Rebuild with the signed auth and simulate again for exact resources
-        const authorized = Operation.invokeHostFunction({ func: hostFunction, auth });
-        const inner = await this.build(channel.publicKey(), authorized);
+        return this.submitAuthorized(Submitter.withAuth(operation, auth), channel, fees);
+    }
+
+    /**
+     * Simulates a contract call and returns the unsigned auth entries its callers must sign.
+     * @param operation - An `invokeHostFunction` operation without auth
+     * @param source - Any existing account to simulate from
+     */
+    async authEntries(operation: xdr.Operation, source: string): Promise<xdr.SorobanAuthorizationEntry[]> {
+        // Simulate in recording mode to collect the required auth
+        const recording = await this.simulate(await this.build(source, operation));
+        return recording.result?.auth ?? [];
+    }
+
+    /**
+     * Submits an already authorized contract call from a channel account inside a fee-bump.
+     * @param operation - An `invokeHostFunction` operation carrying every signed auth entry
+     * @param channel - AgentKred account that sources the inner transaction
+     * @param fees - AgentKred account that pays the fee-bump
+     */
+    async submitAuthorized(operation: xdr.Operation, channel: Keypair, fees: Keypair): Promise<Submitted> {
+        // Simulate with the signed auth for exact resources
+        const inner = await this.build(channel.publicKey(), operation);
         const enforcing = await this.simulate(inner);
 
         // Assemble the inner transaction and sign it as the channel account
@@ -68,6 +78,39 @@ export class Submitter {
         bump.sign(fees);
 
         return this.send(bump);
+    }
+
+    /** Returns a copy of an `invokeHostFunction` operation carrying `auth`. */
+    static withAuth(operation: xdr.Operation, auth: xdr.SorobanAuthorizationEntry[]): xdr.Operation {
+        // Extract the host function and rebuild the operation around it
+        const body = operation.body;
+        if (body.type !== "invokeHostFunction") {
+            throw new Error("Auth can only be attached to an invokeHostFunction operation");
+        }
+
+        return Operation.invokeHostFunction({ func: body.invokeHostFunctionOp.hostFunction, auth });
+    }
+
+    /** Signs an address-credential auth entry with the matching keypair, leaving source-account entries as they are. */
+    async signAuthEntry(
+        entry: xdr.SorobanAuthorizationEntry,
+        signers: Keypair[],
+        validUntil: number,
+    ): Promise<xdr.SorobanAuthorizationEntry> {
+        // Leave source-account credentials untouched
+        const credentials = entry.credentials;
+        if (credentials.type !== "sorobanCredentialsAddress" && credentials.type !== "sorobanCredentialsAddressV2") {
+            return entry;
+        }
+
+        // Find the keypair for the address that must authorize
+        const address = Address.fromScAddress(credentials.value.address).toString();
+        const signer = signers.find((keypair) => keypair.publicKey() === address);
+        if (!signer) {
+            throw new Error(`No signer provided for auth entry of ${address}`);
+        }
+
+        return authorizeEntry(entry, signer, validUntil, this.chain.config.networkPassphrase);
     }
 
     /** Submits a contract call sourced and paid for by `source` itself. */
@@ -132,28 +175,6 @@ export class Submitter {
         return simulation as rpc.Api.SimulateTransactionSuccessResponse;
     }
 
-    /** Signs an address-credential auth entry with the matching keypair. */
-    private async signAuthEntry(
-        entry: xdr.SorobanAuthorizationEntry,
-        signers: Keypair[],
-        validUntil: number,
-    ): Promise<xdr.SorobanAuthorizationEntry> {
-        // Leave source-account credentials untouched
-        const credentials = entry.credentials;
-        if (credentials.type !== "sorobanCredentialsAddress" && credentials.type !== "sorobanCredentialsAddressV2") {
-            return entry;
-        }
-
-        // Find the keypair for the address that must authorize
-        const address = Address.fromScAddress(credentials.value.address).toString();
-        const signer = signers.find((keypair) => keypair.publicKey() === address);
-        if (!signer) {
-            throw new Error(`No signer provided for auth entry of ${address}`);
-        }
-
-        return authorizeEntry(entry, signer, validUntil, this.chain.config.networkPassphrase);
-    }
-
     /** Sends a signed transaction and waits for it to succeed. */
     private async send(tx: Transaction | FeeBumpTransaction): Promise<Submitted> {
         // Send the transaction and fail on immediate rejection
@@ -162,9 +183,9 @@ export class Submitter {
             throw new Error(`Transaction rejected with status ${sent.status}: ${sent.errorResult?.toXDR("base64") ?? ""}`);
         }
 
-        // Wait for confirmation and return the hash, value and contract events
+        // Wait for confirmation and return the hash, ledger, value and contract events
         const result = await this.chain.confirm(sent.hash);
-        return { hash: sent.hash, returnValue: result.returnValue, events: result.events?.contractEventsXdr.flat() ?? [] };
+        return { hash: sent.hash, ledger: result.ledger, returnValue: result.returnValue, events: result.events?.contractEventsXdr.flat() ?? [] };
     }
 }
 

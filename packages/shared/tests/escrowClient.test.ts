@@ -42,7 +42,7 @@ function event(emitter: Buffer, name: string, data: Record<string, xdr.ScVal>): 
 
 /** Wraps events in a submitted transaction. */
 function submitted(events: xdr.ContractEvent[]): Submitted {
-    return { hash: "ab".repeat(32), events };
+    return { hash: "ab".repeat(32), ledger: 1, events };
 }
 
 describe("EscrowClient.terminalEvent", () => {

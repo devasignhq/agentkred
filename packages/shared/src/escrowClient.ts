@@ -1,6 +1,7 @@
 // Typed wrapper around the deployed escrow contract's calls, reads and terminal events.
 
 import { Contract, Keypair, StrKey, nativeToScVal, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { EscrowEvents, RefundReason, SettleOutcome, variantName } from "./events.js";
 import { PayoutStep, Quotes, SignedQuote } from "./quote.js";
 import { Submitted, Submitter } from "./submitter.js";
 
@@ -28,8 +29,8 @@ export interface EscrowView {
 }
 
 export type TerminalEvent =
-    | { kind: "settled"; outcome: "Acknowledged" | "Silent" | "Disputed"; completeness: number; payout: bigint; remainder: bigint }
-    | { kind: "refunded"; reason: "NotAccepted" | "NotDelivered"; amount: bigint };
+    | { kind: "settled"; outcome: SettleOutcome; completeness: number; payout: bigint; remainder: bigint }
+    | { kind: "refunded"; reason: RefundReason; amount: bigint };
 
 export interface Sponsor {
     channel: Keypair;
@@ -63,9 +64,9 @@ export class EscrowClient {
      * Binds the client to a deployed escrow contract.
      * @param contractId - The escrow contract address
      * @param submitter - Submits and simulates the contract calls
-     * @param sponsor - AgentKred's channel and fee accounts for sponsored calls
+     * @param sponsor - AgentKred's channel and fee accounts, needed only for sponsored calls
      */
-    constructor(readonly contractId: string, private readonly submitter: Submitter, private readonly sponsor: Sponsor) {
+    constructor(readonly contractId: string, private readonly submitter: Submitter, private readonly sponsor?: Sponsor) {
         this.contract = new Contract(contractId);
     }
 
@@ -76,38 +77,70 @@ export class EscrowClient {
      * @returns The transaction hash and the new escrow id
      */
     async lock(buyer: Keypair, quote: SignedQuote): Promise<Submitted & { escrowId: bigint }> {
-        // Build the lock call with the signed quote
-        const operation = this.contract.call(
+        // Submit the lock through AgentKred's fee-bump and read back the escrow id
+        const submitted = await this.sponsored(buyer, this.lockCall(buyer.publicKey(), quote));
+        return { ...submitted, escrowId: EscrowClient.escrowId(submitted) };
+    }
+
+    /** Builds the unauthorized `lock` call for a buyer and a signed quote. */
+    lockCall(buyer: string, quote: SignedQuote): xdr.Operation {
+        return this.contract.call(
             "lock",
-            nativeToScVal(buyer.publicKey(), { type: "address" }),
+            nativeToScVal(buyer, { type: "address" }),
             Quotes.toScVal(quote.terms),
             xdr.ScVal.scvBytes(quote.quoteHash),
             xdr.ScVal.scvBytes(quote.signature),
         );
+    }
 
-        // Submit through AgentKred's fee-bump and read back the escrow id
-        const submitted = await this.submitter.sponsored(operation, [buyer], this.sponsor.channel, this.sponsor.fees);
-        return { ...submitted, escrowId: BigInt(scValToNative(submitted.returnValue!)) };
+    /** Builds an unauthorized `accept` call. */
+    acceptCall(escrowId: bigint): xdr.Operation {
+        return this.contract.call("accept", this.id(escrowId));
+    }
+
+    /** Builds an unauthorized `deliver` call recording `manifestHash`. */
+    deliverCall(escrowId: bigint, manifestHash: Buffer): xdr.Operation {
+        return this.contract.call("deliver", this.id(escrowId), xdr.ScVal.scvBytes(manifestHash));
+    }
+
+    /** Builds an unauthorized `acknowledge` call. */
+    acknowledgeCall(escrowId: bigint): xdr.Operation {
+        return this.contract.call("acknowledge", this.id(escrowId));
+    }
+
+    /** Builds an unauthorized `dispute` call at `completeness` percent. */
+    disputeCall(escrowId: bigint, completeness: number): xdr.Operation {
+        return this.contract.call("dispute", this.id(escrowId), nativeToScVal(completeness, { type: "u32" }));
+    }
+
+    /** Reads the new escrow id from a submitted lock's return value. */
+    static escrowId(submitted: Submitted): bigint {
+        // Fail when the lock returned nothing
+        if (!submitted.returnValue) {
+            throw new Error(`Lock transaction ${submitted.hash} returned no escrow id`);
+        }
+
+        return BigInt(scValToNative(submitted.returnValue));
     }
 
     /** Records the seller's acceptance of the job, with AgentKred paying the fee. */
     async accept(seller: Keypair, escrowId: bigint): Promise<Submitted> {
-        return this.sponsored(seller, "accept", this.id(escrowId));
+        return this.sponsored(seller, this.acceptCall(escrowId));
     }
 
     /** Records the seller's manifest hash, with AgentKred paying the fee. */
     async deliver(seller: Keypair, escrowId: bigint, manifestHash: Buffer): Promise<Submitted> {
-        return this.sponsored(seller, "deliver", this.id(escrowId), xdr.ScVal.scvBytes(manifestHash));
+        return this.sponsored(seller, this.deliverCall(escrowId, manifestHash));
     }
 
     /** Records the buyer's acknowledgement of a delivery, with AgentKred paying the fee. */
     async acknowledge(buyer: Keypair, escrowId: bigint): Promise<Submitted> {
-        return this.sponsored(buyer, "acknowledge", this.id(escrowId));
+        return this.sponsored(buyer, this.acknowledgeCall(escrowId));
     }
 
     /** Records the buyer's dispute at a quoted completeness percentage, with AgentKred paying the fee. */
     async dispute(buyer: Keypair, escrowId: bigint, completeness: number): Promise<Submitted> {
-        return this.sponsored(buyer, "dispute", this.id(escrowId), nativeToScVal(completeness, { type: "u32" }));
+        return this.sponsored(buyer, this.disputeCall(escrowId, completeness));
     }
 
     /** Settles an acknowledged, disputed or silently closed escrow from any account, which pays its own fee. */
@@ -163,27 +196,14 @@ export class EscrowClient {
                 continue;
             }
 
-            // Decode the event name and its data map
-            const body = event.body.v0;
-            const name = scValToNative(body.topics[0]);
-            const data = scValToNative(body.data);
-
-            // Return the settlement or refund in a typed form
-            if (name === "escrow_settled") {
-                return {
-                    kind: "settled",
-                    outcome: variantName(data.outcome) as "Acknowledged" | "Silent" | "Disputed",
-                    completeness: Number(data.completeness),
-                    payout: BigInt(data.payout),
-                    remainder: BigInt(data.remainder),
-                };
+            // Return the settlement or refund in its typed form
+            const decoded = EscrowEvents.decode(event.body.v0.topics, event.body.v0.data);
+            if (decoded?.name === "escrow_settled") {
+                const { outcome, completeness, payout, remainder } = decoded;
+                return { kind: "settled", outcome, completeness, payout, remainder };
             }
-            if (name === "escrow_refunded") {
-                return {
-                    kind: "refunded",
-                    reason: variantName(data.reason) as "NotAccepted" | "NotDelivered",
-                    amount: BigInt(data.amount),
-                };
+            if (decoded?.name === "escrow_refunded") {
+                return { kind: "refunded", reason: decoded.reason, amount: decoded.amount };
             }
         }
 
@@ -191,8 +211,13 @@ export class EscrowClient {
     }
 
     /** Submits a party's call through AgentKred's fee-bump, signing only that party's auth entry. */
-    private sponsored(signer: Keypair, method: string, ...args: xdr.ScVal[]): Promise<Submitted> {
-        return this.submitter.sponsored(this.contract.call(method, ...args), [signer], this.sponsor.channel, this.sponsor.fees);
+    private sponsored(signer: Keypair, operation: xdr.Operation): Promise<Submitted> {
+        // Refuse when the client was built without AgentKred's accounts
+        if (!this.sponsor) {
+            throw new Error("Sponsored calls need AgentKred's channel and fee accounts");
+        }
+
+        return this.submitter.sponsored(operation, [signer], this.sponsor.channel, this.sponsor.fees);
     }
 
     /** Encodes an escrow id as the contract's u64. */
@@ -204,9 +229,4 @@ export class EscrowClient {
 /** Converts an optional contract integer into a number or null. */
 function optionalNumber(value: unknown): number | null {
     return value == null ? null : Number(value);
-}
-
-/** Returns the name of a contract unit enum, which decodes as a one-element array. */
-function variantName(value: unknown): string {
-    return Array.isArray(value) ? String(value[0]) : String(value);
 }
