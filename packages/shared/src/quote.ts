@@ -26,7 +26,64 @@ export interface SignedQuote {
     signature: Buffer;
 }
 
+/** A signed quote as JSON: amounts as decimal stroop strings, byte fields as hex. */
+export interface QuoteJson {
+    terms: {
+        seller: string;
+        asset: string;
+        cap: string;
+        floor: string;
+        schedule: { completeness: number; payout: string }[];
+        acceptS: number;
+        deliverS: number;
+        disputeS: number;
+        jobId: string;
+    };
+    quoteHash: string;
+    signature: string;
+}
+
 export class Quotes {
+    /** Converts a signed quote to its JSON wire form. */
+    static toJson(quote: SignedQuote): QuoteJson {
+        const { terms } = quote;
+        return {
+            terms: {
+                seller: terms.seller,
+                asset: terms.asset,
+                cap: terms.cap.toString(),
+                floor: terms.floor.toString(),
+                schedule: terms.schedule.map((step) => ({ completeness: step.completeness, payout: step.payout.toString() })),
+                acceptS: terms.acceptS,
+                deliverS: terms.deliverS,
+                disputeS: terms.disputeS,
+                jobId: terms.jobId.toString("hex"),
+            },
+            quoteHash: quote.quoteHash.toString("hex"),
+            signature: quote.signature.toString("hex"),
+        };
+    }
+
+    /** Parses a signed quote from its JSON wire form, throwing on malformed amounts or byte fields. */
+    static fromJson(json: QuoteJson): SignedQuote {
+        const { terms } = json;
+        return {
+            terms: {
+                seller: terms.seller,
+                asset: terms.asset,
+                cap: BigInt(terms.cap),
+                floor: BigInt(terms.floor),
+                schedule: terms.schedule.map((step) => ({ completeness: step.completeness, payout: BigInt(step.payout) })),
+                acceptS: terms.acceptS,
+                deliverS: terms.deliverS,
+                disputeS: terms.disputeS,
+                jobId: hexBytes(terms.jobId, 32, "jobId"),
+            },
+            quoteHash: hexBytes(json.quoteHash, 32, "quoteHash"),
+            signature: hexBytes(json.signature, 64, "signature"),
+        };
+    }
+
     /** Encodes the terms as the contract's `QuoteTerms` struct: an ScMap with keys in sorted order. */
     static toScVal(terms: QuoteTerms): xdr.ScVal {
         // Encode each schedule step as a sorted map
@@ -96,4 +153,14 @@ export class Quotes {
 
         return xdr.ScVal.scvMap(entries);
     }
+}
+
+/** Decodes a hex string of exactly `length` bytes. */
+function hexBytes(hex: string, length: number, field: string): Buffer {
+    // Reject anything that is not exactly the expected number of hex bytes
+    if (!new RegExp(`^[0-9a-fA-F]{${length * 2}}$`).test(hex)) {
+        throw new Error(`${field} must be ${length} bytes of hex`);
+    }
+
+    return Buffer.from(hex, "hex");
 }
