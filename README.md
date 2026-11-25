@@ -46,6 +46,10 @@ npm run demo         # after funding the buyer at faucet.circle.com
 
 For details, see [examples/cli-demo](examples/cli-demo).
 
+## Running the server
+
+The coordinator, its Postgres journal and the webhooks live in [apps/server](apps/server), which explains how to run them locally. Its routes are described in [docs/api.md](docs/api.md) and the journal in [docs/journal.md](docs/journal.md).
+
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).
