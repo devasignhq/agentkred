@@ -1,6 +1,9 @@
 # Server CI: typecheck, unit tests, and the database tests against a Postgres service.
 name: server
 
+permissions:
+    contents: read
+
 on:
     push:
         branches: [main]
