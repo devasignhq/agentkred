@@ -1,0 +1,51 @@
+# Server CI: typecheck, unit tests, and the database tests against a Postgres service.
+name: server
+
+permissions:
+    contents: read
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - "apps/server/**"
+            - "packages/shared/**"
+            - "package.json"
+            - "package-lock.json"
+            - ".github/workflows/server.yml"
+    pull_request:
+        paths:
+            - "apps/server/**"
+            - "packages/shared/**"
+            - "package.json"
+            - "package-lock.json"
+            - ".github/workflows/server.yml"
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        services:
+            # Same credentials and port as apps/server/.env.test
+            postgres:
+                image: postgres:17
+                env:
+                    POSTGRES_USER: agentkred
+                    POSTGRES_PASSWORD: agentkred
+                    POSTGRES_DB: agentkred_test
+                ports:
+                    - 5433:5432
+                options: >-
+                    --health-cmd "pg_isready -U agentkred"
+                    --health-interval 2s
+                    --health-retries 30
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: npm
+
+            # Install, which also generates the Prisma client, then typecheck and run every offline test
+            - run: npm ci
+            - run: npm run typecheck -w @agentkred/server
+            - run: npm test -w @agentkred/server

@@ -1,6 +1,9 @@
 # Escrow contract CI: unit and property tests, the quote-hash vector, coverage, and a fixed-length fuzz run.
 name: contract
 
+permissions:
+    contents: read
+
 on:
     push:
         branches: [main]

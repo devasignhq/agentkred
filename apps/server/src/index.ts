@@ -1,3 +1,8 @@
-// AgentKred service entry point: escrow API, journal, clock worker, webhooks, submitter, catalog and records.
+// API entry point: serves the escrow and seller routes on the configured port.
 
-export {};
+import { createApp } from "./app.js";
+import { Env } from "./config/env.js";
+
+createApp().listen(Env.port(), () => {
+    console.log(`AgentKred API listening on port ${Env.port()}`);
+});

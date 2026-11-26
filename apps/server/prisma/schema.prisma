@@ -1,0 +1,204 @@
+// AgentKred journal: seller listings, quotes, the escrow projection built from chain events, submissions and webhooks.
+
+generator client {
+    provider = "prisma-client"
+    output   = "../src/generated/prisma"
+}
+
+datasource db {
+    provider = "postgresql"
+}
+
+enum EscrowState {
+    Locked
+    Accepted
+    Delivered
+    Acknowledged
+    Disputed
+    Released
+    Refunded
+}
+
+enum SubmissionStatus {
+    Pending
+    Succeeded
+    Failed
+}
+
+enum DeliveryStatus {
+    Pending
+    Delivered
+    Failed
+}
+
+/// A seller's signed listing; the pay-to account is its identity and the key its quotes are checked against.
+model Seller {
+    payTo         String   @id @map("pay_to")
+    name          String
+    capMin        BigInt   @map("cap_min")
+    capMax        BigInt   @map("cap_max")
+    acceptS       Int      @map("accept_s")
+    deliverS      Int      @map("deliver_s")
+    disputeS      Int      @map("dispute_s")
+    webhookUrl    String?  @map("webhook_url")
+    webhookSecret String   @map("webhook_secret")
+    signedAt      Int      @map("signed_at")
+    signature     String
+    createdAt     DateTime @default(now()) @map("created_at")
+    updatedAt     DateTime @updatedAt @map("updated_at")
+
+    @@map("sellers")
+}
+
+/// A signed quote a buyer asked AgentKred to lock.
+model Quote {
+    quoteHash String   @id @map("quote_hash")
+    seller    String
+    terms     Json
+    signature String
+    createdAt DateTime @default(now()) @map("created_at")
+
+    @@index([seller])
+    @@map("quotes")
+}
+
+/// The webhook a buyer gave when asking to lock a quote; only the buyer who actually locked it receives webhooks.
+model BuyerWebhook {
+    quoteHash String   @map("quote_hash")
+    buyer     String
+    url       String
+    secret    String
+    createdAt DateTime @default(now()) @map("created_at")
+    updatedAt DateTime @updatedAt @map("updated_at")
+
+    @@id([quoteHash, buyer])
+    @@map("buyer_webhooks")
+}
+
+/// Append-only copy of every escrow contract event the ingestor has read.
+model ChainEvent {
+    id             String   @id
+    ledger         Int
+    ledgerClosedAt DateTime @map("ledger_closed_at")
+    txHash         String   @map("tx_hash")
+    contractId     String   @map("contract_id")
+    name           String
+    topics         String[]
+    value          String
+    createdAt      DateTime @default(now()) @map("created_at")
+
+    @@index([ledger, id])
+    @@map("chain_events")
+}
+
+/// How far the ingestor has read the contract's events.
+model IngestCursor {
+    name      String   @id
+    cursor    String?
+    ledger    Int
+    updatedAt DateTime @updatedAt @map("updated_at")
+
+    @@map("ingest_cursor")
+}
+
+/// Projection of `escrow_locked`: the terms every escrow was opened with.
+model Escrow {
+    id          BigInt             @id
+    buyer       String
+    seller      String
+    asset       String
+    cap         BigInt
+    floor       BigInt
+    jobId       String             @map("job_id")
+    quoteHash   String             @map("quote_hash")
+    acceptBy    Int                @map("accept_by")
+    lockedAt    Int                @map("locked_at")
+    lockTx      String             @map("lock_tx")
+    transitions EscrowTransition[]
+
+    @@index([seller])
+    @@index([buyer])
+    @@index([quoteHash])
+    @@map("escrows")
+}
+
+/// Projection of every escrow event as a state transition; the latest row is the escrow's current state.
+model EscrowTransition {
+    id       BigInt      @id @default(autoincrement())
+    escrowId BigInt      @map("escrow_id")
+    escrow   Escrow      @relation(fields: [escrowId], references: [id], onDelete: Cascade)
+    eventId  String      @unique @map("event_id")
+    state    EscrowState
+    at       Int
+    ledger   Int
+    txHash   String      @map("tx_hash")
+    data     Json
+
+    @@index([escrowId, ledger])
+    @@map("escrow_transitions")
+}
+
+/// A transaction AgentKred submitted, from the request to its outcome.
+model ChainTransaction {
+    id        BigInt           @id @default(autoincrement())
+    kind      String
+    escrowId  BigInt?          @map("escrow_id")
+    hash      String?
+    ledger    Int?
+    status    SubmissionStatus @default(Pending)
+    error     String?
+    createdAt DateTime         @default(now()) @map("created_at")
+    updatedAt DateTime         @updatedAt @map("updated_at")
+
+    @@index([escrowId])
+    @@map("chain_transactions")
+}
+
+/// A delivery manifest the seller posted; its hash is the one passed to `deliver`.
+model Manifest {
+    hash           String   @id
+    escrowId       BigInt   @map("escrow_id")
+    artifactSha256 String   @map("artifact_sha256")
+    evidenceUrl    String?  @map("evidence_url")
+    createdAt      DateTime @default(now()) @map("created_at")
+
+    @@index([escrowId])
+    @@map("manifests")
+}
+
+/// The evidence and note a buyer filed with a dispute.
+model Dispute {
+    id           BigInt   @id @default(autoincrement())
+    escrowId     BigInt   @map("escrow_id")
+    completeness Int
+    evidenceUrl  String?  @map("evidence_url")
+    note         String?
+    createdAt    DateTime @default(now()) @map("created_at")
+
+    @@index([escrowId])
+    @@map("disputes")
+}
+
+/// One signed webhook to one recipient, retried with backoff until delivered or given up.
+model WebhookDelivery {
+    id             BigInt         @id @default(autoincrement())
+    eventId        String         @map("event_id")
+    recipient      String
+    url            String
+    escrowId       BigInt         @map("escrow_id")
+    quoteHash      String         @map("quote_hash")
+    seller         String
+    type           String
+    body           String
+    status         DeliveryStatus @default(Pending)
+    attempts       Int            @default(0)
+    nextAttemptAt  DateTime       @default(now()) @map("next_attempt_at")
+    lastStatusCode Int?           @map("last_status_code")
+    lastError      String?        @map("last_error")
+    deliveredAt    DateTime?      @map("delivered_at")
+    createdAt      DateTime       @default(now()) @map("created_at")
+
+    @@unique([eventId, recipient])
+    @@index([status, nextAttemptAt])
+    @@map("webhook_deliveries")
+}
