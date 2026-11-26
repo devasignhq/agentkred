@@ -32,6 +32,11 @@ export class Env {
         return value ? Number(value) : null;
     }
 
+    /** Returns true when webhooks may use plain http and private addresses, which only local development and tests allow. */
+    static webhookAllowInsecure(): boolean {
+        return process.env.WEBHOOK_ALLOW_INSECURE === "true";
+    }
+
     /** Returns AgentKred's channel account key, which sources submitted calls. */
     static channel(): Keypair {
         return Keypair.fromSecret(this.required("CHANNEL_SECRET"));

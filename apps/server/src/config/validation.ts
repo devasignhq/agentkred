@@ -3,12 +3,20 @@
 import { StrKey } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { ApiError } from "./errors.js";
+import { WebhookUrls } from "../utils/webhookUrls.js";
 
 const MAX_CLOCK_S = 30 * 24 * 60 * 60;
 const stroops = z.string().regex(/^\d+$/, "must be a whole number of stroops as a string");
 const clock = z.int().min(1).max(MAX_CLOCK_S);
 const account = z.string().refine((value) => StrKey.isValidEd25519PublicKey(value), "must be a G... account address");
 const httpUrl = z.url({ protocol: /^https?$/ });
+const webhookUrl = z.string().superRefine((value, ctx) => {
+    // Report the webhook guard's objection to the URL
+    const problem = WebhookUrls.problem(value);
+    if (problem) {
+        ctx.addIssue({ code: "custom", message: problem });
+    }
+});
 const authEntry = z.string().min(1).max(20_000);
 
 export const listingBody = z.object({
@@ -20,7 +28,7 @@ export const listingBody = z.object({
         acceptS: clock,
         deliverS: clock,
         disputeS: clock,
-        webhookUrl: httpUrl.nullable(),
+        webhookUrl: webhookUrl.nullable(),
     }),
     signedAt: z.int(),
     signature: z.string(),
@@ -45,7 +53,7 @@ export const quoteJson = z.object({
 export const lockBody = z.object({
     quote: quoteJson,
     auth: authEntry,
-    buyerWebhookUrl: httpUrl.optional(),
+    buyerWebhookUrl: webhookUrl.optional(),
 });
 
 export const authBody = z.object({ auth: authEntry });

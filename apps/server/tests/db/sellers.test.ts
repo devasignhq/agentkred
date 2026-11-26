@@ -68,6 +68,21 @@ describe("POST /sellers", () => {
         }
     });
 
+    it("refuses a webhook URL without https or on a private or metadata address", async () => {
+        const seller = Keypair.random();
+        process.env.WEBHOOK_ALLOW_INSECURE = "false";
+
+        // Post a listing for each disallowed webhook URL
+        try {
+            for (const webhookUrl of ["http://seller.example/hooks", "https://127.0.0.1/hooks", "https://169.254.169.254/latest", "https://localhost:8080/hooks"]) {
+                const response = await request(app).post("/sellers").send(Listings.sign(listing(seller.publicKey(), { webhookUrl }), seller, now()));
+                expect([webhookUrl, response.status, response.body.error.code]).toEqual([webhookUrl, 400, "invalid_request"]);
+            }
+        } finally {
+            process.env.WEBHOOK_ALLOW_INSECURE = "true";
+        }
+    });
+
     it("answers 404 for an unknown seller", async () => {
         const response = await request(app).get(`/sellers/${Keypair.random().publicKey()}`);
 

@@ -4,6 +4,7 @@ import { EVENT_ID_HEADER, SIGNATURE_HEADER, Webhooks } from "@agentkred/shared";
 import { prisma, Tx } from "../config/db.js";
 import { EscrowState, WebhookDelivery } from "../generated/prisma/client.js";
 import { TransitionRow } from "../journal/escrowProjector.js";
+import { WebhookUrls } from "../utils/webhookUrls.js";
 
 /** The webhook event type sent for each escrow state. */
 export const WEBHOOK_TYPES: Record<EscrowState, string> = {
@@ -129,14 +130,13 @@ export class WebhookService {
             [EVENT_ID_HEADER]: delivery.eventId,
         };
 
-        // Post it and capture the status or the network error
+        // Post it through the URL guard and capture the status or the error
         let statusCode: number | null = null;
         let error: string | null = null;
         try {
-            const response = await fetch(delivery.url, { method: "POST", headers, body: delivery.body, signal: AbortSignal.timeout(TIMEOUT_MS) });
-            statusCode = response.status;
-            if (!response.ok) {
-                error = `HTTP ${response.status}`;
+            statusCode = await WebhookUrls.post(delivery.url, headers, delivery.body, TIMEOUT_MS);
+            if (statusCode < 200 || statusCode > 299) {
+                error = `HTTP ${statusCode}`;
             }
         } catch (caught) {
             error = (caught as Error).message;

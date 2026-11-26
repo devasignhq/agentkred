@@ -95,6 +95,21 @@ describe("WebhookService.dispatchDue", () => {
         expect(await prisma.webhookDelivery.findFirst()).toMatchObject({ status: "Failed", attempts: 1, lastError: "Recipient has no webhook secret" });
     });
 
+    it("refuses to send to a private address when insecure webhooks are off", async () => {
+        await queue();
+        process.env.WEBHOOK_ALLOW_INSECURE = "false";
+
+        // Dispatch the delivery to the local receiver
+        try {
+            expect(await WebhookService.dispatchDue()).toBe(1);
+        } finally {
+            process.env.WEBHOOK_ALLOW_INSECURE = "true";
+        }
+
+        expect(received).toHaveLength(0);
+        expect(await prisma.webhookDelivery.findFirst()).toMatchObject({ status: "Pending", attempts: 1, lastError: "Webhook URL must use https" });
+    });
+
     it("doubles the retry delay up to an hour", () => {
         expect([1, 2, 3, 8, 20].map((attempt) => WebhookService.retryDelayMs(attempt))).toEqual([30_000, 60_000, 120_000, 3_600_000, 3_600_000]);
     });
