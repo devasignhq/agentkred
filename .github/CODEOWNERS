@@ -1,0 +1,7 @@
+# Code owners: every change needs the maintainer's review, with CI and the escrow contract named explicitly.
+
+*                       @LennyMalcolm0
+
+/.github/               @LennyMalcolm0
+/contracts/             @LennyMalcolm0
+/packages/shared/       @LennyMalcolm0
