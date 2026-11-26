@@ -85,7 +85,7 @@ export class EscrowService {
     /** Submits the seller's acceptance of an escrow. */
     static async accept(escrowId: bigint, auth: string): Promise<EscrowDetails | PendingCall> {
         // Check the seller signed exactly this accept, then submit it
-        const escrow = await this.load(escrowId);
+        const escrow = await this.load(escrowId, true);
         const operation = stellar.escrow.acceptCall(escrowId);
         const entry = CallValidator.validate(auth, operation, escrow.seller, await stellar.chain.ledgerSequence());
         const submitted = await this.submit("accept", escrowId, operation, entry);
@@ -101,7 +101,7 @@ export class EscrowService {
      */
     static async deliver(escrowId: bigint, artifactSha256: string, evidenceUrl: string | null, auth: string): Promise<EscrowDetails | PendingCall> {
         // Hash the manifest and check the seller signed a deliver of exactly that hash
-        const escrow = await this.load(escrowId);
+        const escrow = await this.load(escrowId, true);
         const manifest: Manifest = { escrowId: escrowId.toString(), artifactSha256, evidenceUrl };
         const hash = Manifests.hash(manifest);
         const operation = stellar.escrow.deliverCall(escrowId, hash);
@@ -118,7 +118,7 @@ export class EscrowService {
     /** Submits the buyer's acknowledgement of a delivery. */
     static async acknowledge(escrowId: bigint, auth: string): Promise<EscrowDetails | PendingCall> {
         // Check the buyer signed exactly this acknowledgement, then submit it
-        const escrow = await this.load(escrowId);
+        const escrow = await this.load(escrowId, true);
         const operation = stellar.escrow.acknowledgeCall(escrowId);
         const entry = CallValidator.validate(auth, operation, escrow.buyer, await stellar.chain.ledgerSequence());
         const submitted = await this.submit("acknowledge", escrowId, operation, entry);
@@ -141,7 +141,7 @@ export class EscrowService {
         auth: string,
     ): Promise<EscrowDetails | PendingCall> {
         // Check the buyer signed exactly this dispute, then submit it
-        const escrow = await this.load(escrowId);
+        const escrow = await this.load(escrowId, true);
         const operation = stellar.escrow.disputeCall(escrowId, completeness);
         const entry = CallValidator.validate(auth, operation, escrow.buyer, await stellar.chain.ledgerSequence());
         const submitted = await this.submit("dispute", escrowId, operation, entry);
@@ -155,7 +155,7 @@ export class EscrowService {
     /** Returns the journal's view of an escrow, or throws a 404. */
     static async get(escrowId: bigint): Promise<EscrowDetails> {
         // Fold the escrow's lock row and transitions into its current view
-        const escrow = await this.load(escrowId);
+        const escrow = await this.load(escrowId, false);
         const record = EscrowFold.fold(escrow, escrow.transitions.map((row) => ({ ...row, data: row.data as Record<string, string | number> })));
 
         // Attach the quote's schedule, the manifest and the latest dispute AgentKred holds
@@ -176,11 +176,14 @@ export class EscrowService {
         return "pending" in result;
     }
 
-    /** Loads an escrow and its transitions, ingesting once more before giving up with a 404. */
-    private static async load(escrowId: bigint) {
-        // Read the journal, catching up once when the escrow is not there yet
+    /**
+     * Loads an escrow and its transitions, or throws a 404.
+     * @param catchUp - Whether to ingest once more before giving up, which only party calls do so reads never reach RPC
+     */
+    private static async load(escrowId: bigint, catchUp: boolean) {
+        // Read the journal, catching up once when asked and the escrow is not there yet
         const query = () => prisma.escrow.findUnique({ where: { id: escrowId }, include: { transitions: true } });
-        const escrow = (await query()) ?? ((await ChainIngestor.runOnce()) > 0 ? await query() : null);
+        const escrow = (await query()) ?? (catchUp && (await ChainIngestor.runOnce()) > 0 ? await query() : null);
         if (!escrow) {
             throw new ApiError(404, "escrow_not_found", `Escrow ${escrowId} is not in the journal`);
         }

@@ -151,6 +151,17 @@ describe("escrow routes", () => {
         expect((await request(app).get("/escrows/abc")).status).toBe(400);
     });
 
+    it("answers a read of an escrow the journal has not seen without ingesting", async () => {
+        // Emit a lock the journal has not read yet
+        emitLocked(chain, 5n, buyer.publicKey(), signedQuote(seller));
+        const ingest = vi.spyOn(ChainIngestor, "runOnce");
+
+        const response = await request(app).get("/escrows/5");
+
+        expect(response.status).toBe(404);
+        expect(ingest).not.toHaveBeenCalled();
+    });
+
     it("stores a landed dispute's evidence and answers 202 when the journal lags behind it", async () => {
         const id = await lock();
 
