@@ -162,6 +162,26 @@ describe("escrow routes", () => {
         expect(ingest).not.toHaveBeenCalled();
     });
 
+    it.each(["acknowledge", "dispute"] as const)("rejects a wrong signer, a mismatched call and an expiring auth on %s without submitting", async (route) => {
+        const id = await lock();
+        const submitted = chain.submitted.length;
+
+        // Build the route's expected call, its body and a poster for it
+        const call = (completeness = 50) => (route === "acknowledge" ? escrowClient.acknowledgeCall(id) : escrowClient.disputeCall(id, completeness));
+        const other = route === "acknowledge" ? escrowClient.acceptCall(id) : call(40);
+        const post = async (auth: string) => request(app).post(`/escrows/${id}/${route}`).send(route === "acknowledge" ? { auth } : { completeness: 50, auth });
+
+        // Post the seller's signature, a different call, and an auth about to expire
+        const bySeller = await post(await signOperation(call(), seller, 2_000));
+        const mismatched = await post(await signOperation(other, buyer, 2_000));
+        const expiring = await post(await signOperation(call(), buyer, chain.latestLedger + 1));
+
+        expect([bySeller.status, bySeller.body.error.code]).toEqual([403, "wrong_signer"]);
+        expect([mismatched.status, mismatched.body.error.code]).toEqual([422, "mismatched_arguments"]);
+        expect([expiring.status, expiring.body.error.code]).toEqual([422, "auth_expired"]);
+        expect(chain.submitted).toHaveLength(submitted);
+    });
+
     it("stores a landed dispute's evidence and answers 202 when the journal lags behind it", async () => {
         const id = await lock();
 
