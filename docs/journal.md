@@ -11,7 +11,8 @@ The journal is the server's Postgres record of every escrow. The chain stays the
 | `escrow_transitions` | One row per escrow event, with the state it moved to and the clocks or amounts it set | Append only |
 | `ingest_cursor` | How far the contract's events have been read | Moves forward |
 | `sellers` | Seller listings | Updated by newer signed listings |
-| `quotes` | Quotes locked through the server, with the buyer's webhook | Written at lock |
+| `quotes` | Quotes locked through the server | Written at the first lock attempt |
+| `buyer_webhooks` | The webhook URL and secret each buyer gave when locking a quote, keyed by quote and buyer | Written at lock |
 | `manifests`, `disputes` | What the seller delivered and the buyer's dispute evidence | Written when posted |
 | `chain_transactions` | Every call the server submitted, and its outcome | Pending, then succeeded or failed |
 | `webhook_deliveries` | Each webhook to each recipient, its attempts and outcome | Until delivered or given up |
@@ -22,7 +23,7 @@ An escrow's current state is its latest transition. Nothing that mirrors the cha
 
 The ingestor polls the RPC's `getEvents` for the escrow contract, starting from the saved cursor. Each new event is appended to `chain_events` and projected into `escrows` and `escrow_transitions` in the same database transaction. A Postgres advisory lock lets only one ingestor run at a time, and inserts are keyed on the RPC's event id, so reading an event twice changes nothing.
 
-The worker (`npm run worker`) ingests every couple of seconds. The API also ingests after each call it submits and waits until the journal has read that ledger, so a response always shows the call's effect. Calls made straight to the contract, such as a `settle` from any account, appear on the worker's next poll.
+The worker (`npm run worker`) ingests every couple of seconds. The API also ingests after each call it submits and waits up to 30 seconds for the journal to read that ledger, so a response shows the call's effect. If the journal falls behind, the API answers 202 with the transaction hash instead, and the worker catches the call up. `GET /escrows/{id}` never ingests. It answers from the journal as it stands. Calls made straight to the contract, such as a `settle` from any account, appear on the worker's next poll.
 
 The RPC only keeps about 7 days of events. On a fresh database the ingestor starts at `INGEST_START_LEDGER`, or at the oldest ledger the RPC still holds. Events for escrows locked before that point are stored but not projected.
 

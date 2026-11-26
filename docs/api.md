@@ -35,7 +35,7 @@ Registers a listing, or updates one.
 | --- | --- |
 | 201 | A new seller. The body includes `webhookSecret`, which is shown only this once |
 | 200 | An update to an existing listing |
-| 400 `invalid_request` | The body doesn't match the shape above |
+| 400 `invalid_request` | The body doesn't match the shape above, or `webhookUrl` breaks the [webhook URL rules](#webhook-urls) |
 | 401 `bad_signature` | The pay-to key didn't sign this listing |
 | 401 `stale_signature` | `signedAt` is more than 5 minutes from the server's clock |
 | 409 `replayed_listing` | A listing signed at the same time or later is already stored |
@@ -59,7 +59,7 @@ Locks a seller's quote. The buyer signs one auth entry covering `lock(buyer, ter
 }
 ```
 
-`quote` is the quote's JSON form (`Quotes.toJson`). `buyerWebhookUrl` is optional.
+`quote` is the quote's JSON form (`Quotes.toJson`). `buyerWebhookUrl` is optional and follows the [webhook URL rules](#webhook-urls). It is stored for this buyer only, so webhooks go to whichever buyer's lock actually lands.
 
 Before paying any fee, the server checks the following and answers with the first that fails:
 
@@ -74,11 +74,11 @@ Before paying any fee, the server checks the following and answers with the firs
 | 422 | `mismatched_arguments` | The auth entry authorizes exactly this contract's `lock` with this buyer and quote, and exactly the cap's transfer beneath it |
 | 422 | `auth_expired` | The auth entry stays valid for at least 3 more ledgers |
 
-On success it answers **201** with `escrow` (as `GET /escrows/{id}` returns it), the lock's `txHash`, and `buyerWebhookSecret` when a webhook URL was given.
+On success it answers **201** with `escrowId`, `escrow` (as `GET /escrows/{id}` returns it), the lock's `txHash`, and `buyerWebhookSecret` when a webhook URL was given. If the lock landed but the journal hasn't read it within 30 seconds, it answers **202** with the same fields and `escrow: null`. Read the escrow later with `GET /escrows/{id}`.
 
 ### Party calls
 
-The seller and buyer each post their own signed auth entry for one call. The server checks that the right party signed it (403 `wrong_signer`), that it covers exactly the expected call (422 `mismatched_arguments`), and that it won't expire during submission (422 `auth_expired`). Each call answers with the escrow's updated view.
+The seller and buyer each post their own signed auth entry for one call. The server checks that the right party signed it (403 `wrong_signer`), that it covers exactly the expected call (422 `mismatched_arguments`), and that it won't expire during submission (422 `auth_expired`). Each call answers **200** with the escrow's updated view. If the call landed but the journal hasn't read it within 30 seconds, it answers **202** with `{ pending: true, escrowId, txHash }`. The call still took effect, and a dispute's evidence is still stored. Read the escrow later with `GET /escrows/{id}` rather than posting again.
 
 | Route | Caller | Body | Contract call |
 | --- | --- | --- | --- |
@@ -104,7 +104,7 @@ Returns the escrow as the journal records it:
 - `schedule` when the quote was locked through this server
 - `transitions`, each with its ledger and transaction hash
 
-A seller checks this before starting work.
+A seller checks this before starting work. The read comes only from the journal, so an escrow locked moments ago straight on the contract can answer 404 until the worker's next poll.
 
 ## Webhooks
 
@@ -123,5 +123,11 @@ Every escrow transition is sent to the seller's listed webhook. It also goes to 
 ```
 
 Each request carries `AgentKred-Event-Id` and `AgentKred-Signature: t=<unix seconds>,v1=<hex>`. The signature is HMAC-SHA256 with your webhook secret over `<t>.<raw body>`. Check it with `Webhooks.verify(secret, rawBody, header, now)`, which also rejects signatures more than 5 minutes old. Use the event id to drop duplicates.
+
+### Webhook URLs
+
+Webhook URLs must use `https` and must not point at `localhost` or at a loopback, private, link-local, carrier-grade NAT, multicast or cloud metadata address. The server checks the URL when it is registered. It checks again on every send, against the addresses the host resolves to at that moment. It never follows redirects, so a 3xx counts as a failed attempt. For local development and tests only, `WEBHOOK_ALLOW_INSECURE=true` lifts these rules.
+
+### Delivery
 
 Any 2xx response counts as delivered. Otherwise the server retries after 30 seconds, doubling the wait up to an hour, and gives up 24 hours after the event. A webhook is never sent unsigned: if the recipient's secret can't be found, the delivery fails without a request. A missed webhook never loses information: `GET /escrows/{id}` always has the current state.
