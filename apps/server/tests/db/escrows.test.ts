@@ -1,11 +1,12 @@
-// Escrow routes over a fake chain: lock, accept, manifest and dispute are validated, submitted and read back from the journal.
+// Escrow routes over a fake chain: every party call is validated, submitted and read back from the journal, or answered 202 when it lags.
 
 import { Keypair, nativeToScVal } from "@stellar/stellar-sdk";
 import { Listings, Manifests, Quotes, SimulationError } from "@agentkred/shared";
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/app.js";
 import { prisma } from "../../src/config/db.js";
+import { ChainIngestor } from "../../src/journal/chainIngestor.js";
 import { emitAccepted, emitDelivered, emitLocked } from "../support/events.js";
 import { FakeChain, resetDatabase } from "../support/fakeChain.js";
 import { escrowClient, lockCall, signAuth, signOperation, signedQuote } from "../support/fixtures.js";
@@ -41,6 +42,10 @@ describe("escrow routes", () => {
         chain = new FakeChain();
         chain.install();
         await registerSeller();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
     });
 
     it("locks a valid quote and serves the escrow with its schedule", async () => {
@@ -144,6 +149,32 @@ describe("escrow routes", () => {
     it("answers 404 for an unknown escrow and 400 for a malformed id", async () => {
         expect((await request(app).get("/escrows/77")).status).toBe(404);
         expect((await request(app).get("/escrows/abc")).status).toBe(400);
+    });
+
+    it("stores a landed dispute's evidence and answers 202 when the journal lags behind it", async () => {
+        const id = await lock();
+
+        // Land the dispute while the journal fails to catch up
+        chain.nextSubmit = () => ({ hash: "dd".repeat(32), ledger: chain.latestLedger + 1, events: [] });
+        vi.spyOn(ChainIngestor, "waitForLedger").mockRejectedValueOnce(new Error("timed out"));
+        const auth = await signOperation(escrowClient.disputeCall(id, 50), buyer, 2_000);
+        const response = await request(app).post(`/escrows/${id}/dispute`).send({ completeness: 50, note: "Half the pages are missing", auth });
+
+        expect([response.status, response.body]).toEqual([202, { pending: true, escrowId: id.toString(), txHash: "dd".repeat(32) }]);
+        expect(await prisma.dispute.findFirst()).toMatchObject({ escrowId: id, completeness: 50, note: "Half the pages are missing" });
+        expect(await prisma.chainTransaction.findFirst({ where: { kind: "dispute" } })).toMatchObject({ status: "Succeeded" });
+    });
+
+    it("answers 202 with the escrow id when the journal lags behind a landed lock", async () => {
+        // Land the lock while the journal fails to catch up
+        const quote = signedQuote(seller);
+        chain.nextSubmit = () => ({ hash: "ee".repeat(32), ledger: chain.latestLedger + 1, returnValue: nativeToScVal(3n, { type: "u64" }), events: [] });
+        vi.spyOn(ChainIngestor, "waitForLedger").mockRejectedValueOnce(new Error("timed out"));
+        const auth = await signAuth(lockCall(buyer.publicKey(), quote), buyer, 2_000);
+        const response = await request(app).post("/escrows").send({ quote: Quotes.toJson(quote), auth });
+
+        expect(response.status).toBe(202);
+        expect(response.body).toMatchObject({ escrowId: "3", escrow: null, txHash: "ee".repeat(32) });
     });
 
     it("keeps the locking buyer's webhook when another buyer posts the same quote while the lock lands", async () => {
