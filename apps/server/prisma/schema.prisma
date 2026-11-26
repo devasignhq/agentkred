@@ -50,19 +50,29 @@ model Seller {
     @@map("sellers")
 }
 
-/// A signed quote a buyer asked AgentKred to lock, with the buyer's optional webhook.
+/// A signed quote a buyer asked AgentKred to lock.
 model Quote {
-    quoteHash          String   @id @map("quote_hash")
-    seller             String
-    buyer              String
-    terms              Json
-    signature          String
-    buyerWebhookUrl    String?  @map("buyer_webhook_url")
-    buyerWebhookSecret String?  @map("buyer_webhook_secret")
-    createdAt          DateTime @default(now()) @map("created_at")
+    quoteHash String   @id @map("quote_hash")
+    seller    String
+    terms     Json
+    signature String
+    createdAt DateTime @default(now()) @map("created_at")
 
     @@index([seller])
     @@map("quotes")
+}
+
+/// The webhook a buyer gave when asking to lock a quote; only the buyer who actually locked it receives webhooks.
+model BuyerWebhook {
+    quoteHash String   @map("quote_hash")
+    buyer     String
+    url       String
+    secret    String
+    createdAt DateTime @default(now()) @map("created_at")
+    updatedAt DateTime @updatedAt @map("updated_at")
+
+    @@id([quoteHash, buyer])
+    @@map("buyer_webhooks")
 }
 
 /// Append-only copy of every escrow contract event the ingestor has read.

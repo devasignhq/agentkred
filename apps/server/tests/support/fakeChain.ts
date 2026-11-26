@@ -91,6 +91,6 @@ export class FakeChain {
 /** Empties every journal table. */
 export async function resetDatabase(): Promise<void> {
     await prisma.$executeRawUnsafe(
-        "TRUNCATE sellers, quotes, chain_events, ingest_cursor, escrows, escrow_transitions, chain_transactions, manifests, disputes, webhook_deliveries RESTART IDENTITY CASCADE",
+        "TRUNCATE sellers, quotes, buyer_webhooks, chain_events, ingest_cursor, escrows, escrow_transitions, chain_transactions, manifests, disputes, webhook_deliveries RESTART IDENTITY CASCADE",
     );
 }

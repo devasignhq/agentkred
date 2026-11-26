@@ -145,4 +145,32 @@ describe("escrow routes", () => {
         expect((await request(app).get("/escrows/77")).status).toBe(404);
         expect((await request(app).get("/escrows/abc")).status).toBe(400);
     });
+
+    it("keeps the locking buyer's webhook when another buyer posts the same quote while the lock lands", async () => {
+        // Have another buyer post the same quote, and fail, while the buyer's lock is being submitted
+        const quote = signedQuote(seller);
+        const other = Keypair.random();
+        const otherAuth = await signAuth(lockCall(other.publicKey(), quote), other, 2_000);
+        let otherStatus = 0;
+        chain.nextSubmit = (async () => {
+            chain.nextSubmit = () => {
+                throw new SimulationError("HostError: Error(Contract, #5)");
+            };
+            otherStatus = (await request(app).post("/escrows").send({ quote: Quotes.toJson(quote), auth: otherAuth, buyerWebhookUrl: "https://other.example/hooks" })).status;
+            return { hash: "aa".repeat(32), ledger: emitLocked(chain, 1n, buyer.publicKey(), quote), returnValue: nativeToScVal(1n, { type: "u64" }), events: [] };
+        }) as unknown as FakeChain["nextSubmit"];
+
+        // Lock as the buyer
+        const auth = await signAuth(lockCall(buyer.publicKey(), quote), buyer, 2_000);
+        const locked = await request(app).post("/escrows").send({ quote: Quotes.toJson(quote), auth, buyerWebhookUrl: "https://buyer.example/hooks" });
+
+        // Read who the buyer webhook goes to and with which secret
+        const delivery = await prisma.webhookDelivery.findFirst({ where: { recipient: "buyer" } });
+        const webhook = await prisma.buyerWebhook.findUnique({ where: { quoteHash_buyer: { quoteHash: quote.quoteHash.toString("hex"), buyer: buyer.publicKey() } } });
+
+        expect(otherStatus).toBe(409);
+        expect(locked.status).toBe(201);
+        expect(delivery?.url).toBe("https://buyer.example/hooks");
+        expect(webhook?.secret).toBe(locked.body.buyerWebhookSecret);
+    });
 });

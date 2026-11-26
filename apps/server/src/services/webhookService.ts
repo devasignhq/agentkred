@@ -26,13 +26,13 @@ const TIMEOUT_MS = 10 * 1000;
 export class WebhookService {
     /** Queues a transition's webhook for the seller and, when it gave one at lock, the buyer. */
     static async enqueue(tx: Tx, transition: TransitionRow): Promise<void> {
-        // Find the escrow, its seller's listing and the quote it was locked with
+        // Find the escrow, its seller's listing and the webhook of the buyer who locked it
         const escrow = await tx.escrow.findUnique({ where: { id: transition.escrowId } });
         if (!escrow) {
             return;
         }
         const listing = await tx.seller.findUnique({ where: { payTo: escrow.seller } });
-        const quote = await tx.quote.findUnique({ where: { quoteHash: escrow.quoteHash } });
+        const buyerWebhook = await tx.buyerWebhook.findUnique({ where: { quoteHash_buyer: { quoteHash: escrow.quoteHash, buyer: escrow.buyer } } });
 
         // Build the event body every recipient receives
         const type = WEBHOOK_TYPES[transition.state];
@@ -51,8 +51,8 @@ export class WebhookService {
         if (listing?.webhookUrl) {
             recipients.push({ recipient: "seller", url: listing.webhookUrl });
         }
-        if (quote?.buyerWebhookUrl && quote.buyer === escrow.buyer) {
-            recipients.push({ recipient: "buyer", url: quote.buyerWebhookUrl });
+        if (buyerWebhook) {
+            recipients.push({ recipient: "buyer", url: buyerWebhook.url });
         }
 
         // Queue one delivery per recipient, once per event
@@ -162,11 +162,18 @@ export class WebhookService {
 
     /** Returns the webhook secret of the delivery's recipient. */
     private static async secretFor(delivery: WebhookDelivery): Promise<string | null> {
-        // Read the seller's listing secret or the buyer's per-quote secret
+        // Read the seller's listing secret
         if (delivery.recipient === "seller") {
             return (await prisma.seller.findUnique({ where: { payTo: delivery.seller } }))?.webhookSecret ?? null;
         }
 
-        return (await prisma.quote.findUnique({ where: { quoteHash: delivery.quoteHash } }))?.buyerWebhookSecret ?? null;
+        // Read the secret of the buyer who locked the escrow
+        const escrow = await prisma.escrow.findUnique({ where: { id: delivery.escrowId } });
+        if (!escrow) {
+            return null;
+        }
+        const buyerWebhook = await prisma.buyerWebhook.findUnique({ where: { quoteHash_buyer: { quoteHash: delivery.quoteHash, buyer: escrow.buyer } } });
+
+        return buyerWebhook?.secret ?? null;
     }
 }

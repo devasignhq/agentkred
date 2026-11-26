@@ -48,18 +48,20 @@ export class EscrowService {
             usdcContractId: stellar.usdcContractId,
         });
 
-        // Store the quote with the buyer's webhook and a fresh secret for it
+        // Store the quote, leaving an existing row as it is
         const quoteHash = quote.quoteHash.toString("hex");
+        const stored = { quoteHash, seller: quote.terms.seller, terms: quoteJson.terms, signature: quote.signature.toString("hex") };
+        await prisma.quote.upsert({ where: { quoteHash }, create: stored, update: {} });
+
+        // Store the buyer's webhook under this buyer with a fresh secret
         const buyerWebhookSecret = buyerWebhookUrl ? randomBytes(32).toString("hex") : undefined;
-        const stored = {
-            seller: quote.terms.seller,
-            buyer,
-            terms: quoteJson.terms,
-            signature: quote.signature.toString("hex"),
-            buyerWebhookUrl: buyerWebhookUrl ?? null,
-            buyerWebhookSecret: buyerWebhookSecret ?? null,
-        };
-        await prisma.quote.upsert({ where: { quoteHash }, create: { quoteHash, ...stored }, update: stored });
+        if (buyerWebhookUrl && buyerWebhookSecret) {
+            await prisma.buyerWebhook.upsert({
+                where: { quoteHash_buyer: { quoteHash, buyer } },
+                create: { quoteHash, buyer, url: buyerWebhookUrl, secret: buyerWebhookSecret },
+                update: { url: buyerWebhookUrl, secret: buyerWebhookSecret },
+            });
+        }
 
         // Submit the lock and read the new escrow from the journal
         const submitted = await this.submit("lock", null, stellar.escrow.lockCall(buyer, quote), entry);
